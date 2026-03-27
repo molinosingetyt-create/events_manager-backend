@@ -1,0 +1,64 @@
+# Entornos virtuales
+# Con y sin barra final por compatibilidad entre Git / SO / IDEs
+.venv
+.venv/
+venv/
+env/
+ENV/
+
+# Variables de entorno (secretos — usar .env.example como plantilla)
+.env
+.env.local
+.env.*.local
+
+# Bytecode y caché de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribución / empaquetado
+build/
+dist/
+*.egg
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Herramientas de test y tipos
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.hypothesis/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Archivos subidos en local (ajusta si quieres versionar alguna carpeta)
+uploads/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# pyenv
+.python-version

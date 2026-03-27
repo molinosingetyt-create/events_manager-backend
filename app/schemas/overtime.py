@@ -1,0 +1,65 @@
+from datetime import date as DateType
+from datetime import datetime
+from decimal import Decimal
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+
+class UserBriefRead(BaseModel):
+    id: int
+    name: str
+    email: str
+
+    model_config = {"from_attributes": True}
+
+
+class OvertimeRequestCreate(BaseModel):
+    employee_id: int
+    date: DateType
+    hours: Decimal = Field(gt=0, max_digits=8, decimal_places=2)
+    justification: str = Field(min_length=1)
+
+
+class OvertimeRequestUpdate(BaseModel):
+    date: Optional[DateType] = None
+    hours: Optional[Decimal] = Field(default=None, gt=0, max_digits=8, decimal_places=2)
+    justification: str | None = Field(default=None, min_length=1)
+
+
+class OvertimeApproveReject(BaseModel):
+    approved: bool
+    approval_comment: str | None = None
+
+
+class OvertimeHistoryRead(BaseModel):
+    id: int
+    request_id: int
+    action: str
+    user_id: Optional[int]
+    user: Optional[UserBriefRead] = None
+    comment: Optional[str]
+    snapshot: Optional[str]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class OvertimeRequestRead(BaseModel):
+    id: int
+    employee_id: int
+    employee_name: str
+    requested_by: int
+    requester: UserBriefRead
+    date: DateType
+    hours: Decimal
+    justification: str
+    status: str
+    approved_by: Optional[int]
+    approver: Optional[UserBriefRead] = None
+    approval_comment: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    history: list[OvertimeHistoryRead] = []
+
+    model_config = {"from_attributes": True}
