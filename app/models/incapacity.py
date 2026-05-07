@@ -9,7 +9,29 @@ from app.models.mixins import StatusMixin, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.employee import Employee
+    from app.models.incapacity_catalog import Diagnosis, EpsArlEntity, TemporalCategory
     from app.models.user import User
+
+
+class IncapacityExtension(Base, TimestampMixin):
+    """Prórroga asociada a una incapacidad (fechas, imagen y nota obligatorios)."""
+
+    __tablename__ = "incapacity_extensions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    incapacity_id: Mapped[int] = mapped_column(
+        ForeignKey("incapacity_notes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    file_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    note: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+
+    incapacity_note: Mapped["IncapacityNote"] = relationship(
+        "IncapacityNote", back_populates="extensions"
+    )
+    creator: Mapped["User"] = relationship("User", foreign_keys=[created_by])
 
 
 class IncapacityNote(Base, TimestampMixin, StatusMixin):
@@ -24,8 +46,27 @@ class IncapacityNote(Base, TimestampMixin, StatusMixin):
     end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     file_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    temporal_category_id: Mapped[int] = mapped_column(
+        ForeignKey("temporal_categories.id", ondelete="RESTRICT"), nullable=False
+    )
+    eps_arl_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("eps_arl_entities.id", ondelete="SET NULL"), nullable=True
+    )
+    diagnosis_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("diagnoses.id", ondelete="SET NULL"), nullable=True
+    )
+    long_absence_document_kind: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    long_absence_second_file_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    long_absence_eps_transcribed_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     employee: Mapped["Employee"] = relationship("Employee", back_populates="incapacity_notes")
+    temporal_category: Mapped["TemporalCategory"] = relationship(
+        "TemporalCategory", back_populates="incapacity_notes"
+    )
+    eps_arl: Mapped[Optional["EpsArlEntity"]] = relationship(
+        "EpsArlEntity", back_populates="incapacity_notes"
+    )
+    diagnosis: Mapped[Optional["Diagnosis"]] = relationship("Diagnosis", back_populates="incapacity_notes")
     creator: Mapped["User"] = relationship("User")
     history_entries: Mapped[list["IncapacityNoteHistory"]] = relationship(
         "IncapacityNoteHistory",
@@ -36,6 +77,11 @@ class IncapacityNote(Base, TimestampMixin, StatusMixin):
         "IncapacityComment",
         back_populates="incapacity",
         order_by="IncapacityComment.created_at",
+    )
+    extensions: Mapped[list["IncapacityExtension"]] = relationship(
+        "IncapacityExtension",
+        back_populates="incapacity_note",
+        order_by="IncapacityExtension.id",
     )
 
 

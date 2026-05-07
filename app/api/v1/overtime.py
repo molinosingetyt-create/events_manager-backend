@@ -5,9 +5,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import client_ip, get_current_user, require_roles
+from app.api.deps import client_ip, get_current_user, require_any_permission
 from app.db.session import get_db
-from app.models.enums import Role
 from app.models.user import User
 from app.schemas.common import PaginatedResponse
 from app.schemas.overtime import (
@@ -18,6 +17,7 @@ from app.schemas.overtime import (
     OvertimeRequestUpdate,
     UserBriefRead,
 )
+from app.realtime.notify import broadcast_data_changed
 from app.services import audit_service
 from app.services import overtime_service as svc
 
@@ -117,7 +117,7 @@ async def create_overtime(
     body: OvertimeRequestCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
     current: Annotated[
-        User, Depends(require_roles(Role.LEADER, Role.ADMIN, Role.HR, Role.MANAGEMENT))
+        User, Depends(require_any_permission("overtime.create"))
     ],
 ) -> OvertimeRequestRead:
     r = await svc.create_request(db, current, body)
@@ -130,6 +130,7 @@ async def create_overtime(
         ip_address=client_ip(request),
     )
     await db.commit()
+    await broadcast_data_changed(["overtime", "notifications"])
     return _to_read(r)
 
 
@@ -165,7 +166,7 @@ async def update_overtime(
     body: OvertimeRequestUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
     current: Annotated[
-        User, Depends(require_roles(Role.LEADER, Role.ADMIN, Role.HR, Role.MANAGEMENT))
+        User, Depends(require_any_permission("overtime.edit"))
     ],
 ) -> OvertimeRequestRead:
     r = await svc.update_request(db, current, request_id, body)
@@ -178,6 +179,7 @@ async def update_overtime(
         ip_address=client_ip(request),
     )
     await db.commit()
+    await broadcast_data_changed(["overtime", "notifications"])
     return _to_read(r)
 
 
@@ -187,7 +189,7 @@ async def decide_overtime(
     request_id: int,
     body: OvertimeApproveReject,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current: Annotated[User, Depends(require_roles(Role.MANAGEMENT, Role.ADMIN))],
+    current: Annotated[User, Depends(require_any_permission("overtime.approve"))],
 ) -> OvertimeRequestRead:
     r = await svc.approve_or_reject(db, current, request_id, body)
     await audit_service.write_audit(
@@ -200,6 +202,7 @@ async def decide_overtime(
         ip_address=client_ip(request),
     )
     await db.commit()
+    await broadcast_data_changed(["overtime", "notifications"])
     return _to_read(r)
 
 
@@ -208,7 +211,7 @@ async def delete_overtime(
     request: Request,
     request_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current: Annotated[User, Depends(require_roles(Role.ADMIN, Role.HR))],
+    current: Annotated[User, Depends(require_any_permission("overtime.delete"))],
 ) -> dict[str, str]:
     await svc.delete_request(db, current, request_id)
     await audit_service.write_audit(
@@ -220,4 +223,5 @@ async def delete_overtime(
         ip_address=client_ip(request),
     )
     await db.commit()
+    await broadcast_data_changed(["overtime", "notifications"])
     return {"detail": "Operación correcta"}

@@ -9,6 +9,7 @@ from app.models.mixins import StatusMixin, TimestampMixin
 if TYPE_CHECKING:
     from app.models.area import Area
     from app.models.incapacity import IncapacityNote
+    from app.models.incapacity_catalog import TemporalCategory
     from app.models.overtime import OvertimeRequest
     from app.models.user import User
 
@@ -25,10 +26,16 @@ class Employee(Base, TimestampMixin, StatusMixin):
     leader_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    temporal_category_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("temporal_categories.id", ondelete="RESTRICT"), nullable=True
+    )
 
     area: Mapped["Area"] = relationship("Area", back_populates="employees")
     leader_user: Mapped[Optional["User"]] = relationship(
         "User", foreign_keys=[leader_id], back_populates="led_employees"
+    )
+    temporal_category: Mapped[Optional["TemporalCategory"]] = relationship(
+        "TemporalCategory", back_populates="employees"
     )
     overtime_requests: Mapped[list["OvertimeRequest"]] = relationship(
         "OvertimeRequest", back_populates="employee"

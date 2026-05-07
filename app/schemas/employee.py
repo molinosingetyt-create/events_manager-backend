@@ -16,7 +16,7 @@ class EmployeeBase(BaseModel):
 
 
 class EmployeeCreate(EmployeeBase):
-    pass
+    temporal_category_id: int
 
 
 class EmployeeUpdate(BaseModel):
@@ -25,6 +25,7 @@ class EmployeeUpdate(BaseModel):
     position: str | None = Field(default=None, min_length=1, max_length=255)
     area_id: int | None = None
     leader_id: Optional[int] = None
+    temporal_category_id: int | None = None
     status: EntityStatus | None = None
 
 
@@ -37,6 +38,8 @@ class EmployeeRead(BaseModel):
     area_name: str = ""
     leader_id: Optional[int]
     leader_name: Optional[str] = None
+    temporal_category_id: int | None = None
+    temporal_category_name: str = ""
     status: str
     created_at: datetime
     updated_at: datetime

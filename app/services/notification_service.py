@@ -5,8 +5,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.app_notification import AppNotification
 from app.models.employee import Employee
-from app.models.enums import AppNotificationKind, Role
+from app.models.enums import AppNotificationKind, EntityStatus
 from app.models.overtime import OvertimeRequest
+from app.models.permission import Permission
+from app.models.profile import Profile, profile_permissions
 from app.models.user import User
 
 
@@ -37,7 +39,12 @@ async def notify_admins_new_pending_ot(
 ) -> None:
     """Avisa a administración y gerencia por cada solicitud pendiente nueva."""
     r = await db.execute(
-        select(User.id).where(User.role.in_([Role.ADMIN.value, Role.MANAGEMENT.value]))
+        select(User.id)
+        .join(Profile, User.profile_id == Profile.id)
+        .join(profile_permissions, profile_permissions.c.profile_id == Profile.id)
+        .join(Permission, Permission.id == profile_permissions.c.permission_id)
+        .where(Permission.code == "overtime.approve", User.status == EntityStatus.ACTIVE.value)
+        .distinct()
     )
     kind = AppNotificationKind.OVERTIME_PENDING.value
     for (uid,) in r.all():

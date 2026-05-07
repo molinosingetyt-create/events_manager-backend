@@ -8,6 +8,7 @@ from app.core.exceptions import not_found
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.notification import NotificationRead, UnreadCountResponse
+from app.realtime.notify import broadcast_data_changed
 from app.services import notification_service as notif_svc
 
 router = APIRouter()
@@ -43,6 +44,7 @@ async def mark_notification_read(
         raise not_found("Notificación no encontrada")
     await db.commit()
     await db.refresh(n)
+    await broadcast_data_changed(["notifications"])
     return NotificationRead(**notif_svc.to_read_model(n))
 
 
@@ -53,4 +55,5 @@ async def mark_all_notifications_read(
 ) -> dict:
     await notif_svc.mark_all_read(db, current.id)
     await db.commit()
+    await broadcast_data_changed(["notifications"])
     return {"ok": True}

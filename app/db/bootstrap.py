@@ -18,6 +18,7 @@ from app.db.base import Base
 from app.db.session import AsyncSessionLocal, engine
 from app.models.area import Area
 from app.models.enums import EntityStatus, Role
+from app.models.profile import Profile
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -45,8 +46,8 @@ async def init_db() -> None:
 
 
 async def seed_admin() -> None:
-    email = os.environ.get("ADMIN_EMAIL", "admin@example.com")
-    password = os.environ.get("ADMIN_PASSWORD", "Admin12345!")
+    email = os.environ.get("ADMIN_EMAIL", "ingenierotyt@molinosdelatlantico.com")
+    password = os.environ.get("ADMIN_PASSWORD", "MDA-2026+*")
 
     async with AsyncSessionLocal() as session:
         async with session.begin():
@@ -60,19 +61,30 @@ async def seed_admin() -> None:
                 )
                 return
 
-            r = await session.execute(select(Area).where(Area.name == "General"))
+            r = await session.execute(select(Area).where(Area.name == "ADMINISTRACION BARRANQUILLA"))
             area = r.scalar_one_or_none()
             if not area:
-                area = Area(name="General", status=EntityStatus.ACTIVE.value)
+                area = Area(name="ADMINISTRACION BARRANQUILLA", status=EntityStatus.ACTIVE.value)
                 session.add(area)
                 await session.flush()
-                logger.info('Área "General" creada.')
+                logger.info('Área "ADMINISTRACION BARRANQUILLA" creada.')
+
+            pr = await session.execute(select(Profile).where(Profile.code == Role.ADMIN.value))
+            profile = pr.scalar_one_or_none()
+            if not profile:
+                logger.error(
+                    "Seed admin omitido: no hay perfil con código %s en «profiles». "
+                    "Ejecute las migraciones Alembic (p. ej. alembic upgrade head).",
+                    Role.ADMIN.value,
+                )
+                return
 
             user = User(
-                name="Administrator",
+                name="ROBIN DANIEL GRONDONA JIMENEZ",
                 email=email,
                 hashed_password=get_password_hash(password),
-                role=Role.ADMIN.value,
+                role=profile.code,
+                profile_id=profile.id,
                 area_id=area.id,
                 status=EntityStatus.ACTIVE.value,
             )

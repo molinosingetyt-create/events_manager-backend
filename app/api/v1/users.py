@@ -4,13 +4,16 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import client_ip, get_current_user, require_roles
+from app.api.deps import client_ip, get_current_user, require_any_permission
+from app.core.exceptions import forbidden
 from app.db.session import get_db
-from app.models.enums import Role
 from app.models.user import User
 from app.schemas.common import PaginatedResponse
+from app.schemas.permission import PermissionBrief
 from app.schemas.user import UserCreate, UserRead, UserUpdate
+from app.realtime.notify import broadcast_data_changed
 from app.services import audit_service
+from app.services import rbac_service
 from app.services import user_service as svc
 
 router = APIRouter()
@@ -21,11 +24,20 @@ async def me(current: Annotated[User, Depends(get_current_user)]) -> User:
     return current
 
 
+@router.get("/me/permissions", response_model=list[PermissionBrief])
+async def my_permissions(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current: Annotated[User, Depends(get_current_user)],
+) -> list[PermissionBrief]:
+    rows = await rbac_service.permission_briefs_for_user(db, current)
+    return [PermissionBrief(code=c, name=n) for c, n in rows]
+
+
 @router.get("", response_model=PaginatedResponse[UserRead])
 async def list_users(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current: Annotated[User, Depends(get_current_user)],
+    current: Annotated[User, Depends(require_any_permission("users.view"))],
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     area_id: int | None = None,
@@ -56,7 +68,7 @@ async def create_user(
     request: Request,
     body: UserCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current: Annotated[User, Depends(require_roles(Role.ADMIN, Role.HR))],
+    current: Annotated[User, Depends(require_any_permission("users.create"))],
 ) -> User:
     u = await svc.create_user(db, body)
     await audit_service.write_audit(
@@ -65,10 +77,11 @@ async def create_user(
         action="users.create",
         entity_type="user",
         entity_id=u.id,
-        details={"email": body.email, "role": body.role.value},
+        details={"email": body.email, "role": body.role},
         ip_address=client_ip(request),
     )
     await db.commit()
+    await broadcast_data_changed(["users"])
     return UserRead.model_validate(u)
 
 
@@ -84,13 +97,7 @@ async def get_user(
         from app.core.exceptions import not_found
 
         raise not_found()
-    if current.id != user_id and current.role not in (
-        Role.ADMIN.value,
-        Role.HR.value,
-        Role.MANAGEMENT.value,
-    ):
-        from app.core.exceptions import forbidden
-
+    if current.id != user_id and not await rbac_service.user_has_any_permission(db, current, "users.view"):
         raise forbidden()
     await audit_service.write_audit(
         db,
@@ -110,7 +117,7 @@ async def update_user(
     user_id: int,
     body: UserUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current: Annotated[User, Depends(require_roles(Role.ADMIN, Role.HR))],
+    current: Annotated[User, Depends(require_any_permission("users.edit"))],
 ) -> User:
     u = await svc.update_user(db, user_id, body)
     await audit_service.write_audit(
@@ -122,6 +129,7 @@ async def update_user(
         ip_address=client_ip(request),
     )
     await db.commit()
+    await broadcast_data_changed(["users"])
     return UserRead.model_validate(u)
 
 
@@ -130,7 +138,7 @@ async def delete_user(
     request: Request,
     user_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current: Annotated[User, Depends(require_roles(Role.ADMIN, Role.HR))],
+    current: Annotated[User, Depends(require_any_permission("users.delete"))],
 ) -> dict[str, str]:
     await svc.delete_user(db, user_id)
     await audit_service.write_audit(
@@ -142,4 +150,5 @@ async def delete_user(
         ip_address=client_ip(request),
     )
     await db.commit()
+    await broadcast_data_changed(["users"])
     return {"detail": "Operación correcta"}

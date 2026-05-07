@@ -1,25 +1,93 @@
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import bad_request, forbidden, not_found
 from app.models.employee import Employee
-from app.models.enums import EntityStatus, IncapacityHistoryAction, Role
-from app.models.incapacity import IncapacityComment, IncapacityNote, IncapacityNoteHistory
+from app.models.enums import EntityStatus, IncapacityHistoryAction, LongAbsenceDocumentKind, Role
+from app.models.incapacity import IncapacityComment, IncapacityExtension, IncapacityNote, IncapacityNoteHistory
 from app.models.user import User
 from app.schemas.incapacity import IncapacityCommentCreate, IncapacityNoteCreate, IncapacityNoteUpdate
+from app.services.incapacity_catalog_service import (
+    validate_note_catalog_refs,
+)
+from app.services.rbac_service import behavior_key
 
 _INC_BASE = (
     selectinload(IncapacityNote.employee),
     selectinload(IncapacityNote.creator),
+    selectinload(IncapacityNote.temporal_category),
+    selectinload(IncapacityNote.eps_arl),
+    selectinload(IncapacityNote.diagnosis),
     selectinload(IncapacityNote.history_entries).selectinload(IncapacityNoteHistory.user),
+)
+_INC_LIST = _INC_BASE + (
+    selectinload(IncapacityNote.extensions).selectinload(IncapacityExtension.creator),
 )
 _INC_FULL = _INC_BASE + (
     selectinload(IncapacityNote.comments).selectinload(IncapacityComment.user),
+    selectinload(IncapacityNote.extensions).selectinload(IncapacityExtension.creator),
 )
+
+
+def inclusive_incapacity_days(start: date, end: date | None) -> int:
+    """Días calendario inclusivos entre inicio y fin; sin fin cuenta como un solo día."""
+    if end is None:
+        return 1
+    if end < start:
+        raise bad_request("La fecha fin no puede ser anterior a la fecha de inicio")
+    return (end - start).days + 1
+
+
+def validate_long_absence_document_rules(*, start: date, end: date | None, kind: str | None) -> None:
+    """Si la incapacidad es de 3+ días, debe indicarse historia clínica o incapacidad transcrita por EPS."""
+    days = inclusive_incapacity_days(start, end)
+    allowed = (
+        LongAbsenceDocumentKind.HISTORIA_CLINICA.value,
+        LongAbsenceDocumentKind.INCAPACIDAD_EPS.value,
+    )
+    if days >= 3:
+        if kind not in allowed:
+            raise bad_request(
+                "Para incapacidades de 3 o más días debe indicar si el soporte es historia clínica "
+                "o incapacidad transcrita por EPS."
+            )
+    elif kind is not None:
+        raise bad_request(
+            "El tipo de documento (historia clínica / EPS) solo aplica para incapacidades de 3 o más días."
+        )
+
+
+def validate_long_absence_supports(
+    *,
+    days: int,
+    kind: str | None,
+    second_file_url: str | None,
+    eps_transcribed_text: str | None,
+) -> None:
+    """Historia clínica y EPS (3+ días): siempre imagen obligatoria; no se admite texto transcrito."""
+    txt = (eps_transcribed_text or "").strip()
+    if days < 3:
+        if second_file_url or txt:
+            raise bad_request("El soporte adicional solo aplica para incapacidades de 3 o más días.")
+        return
+    if kind == LongAbsenceDocumentKind.HISTORIA_CLINICA.value:
+        if txt:
+            raise bad_request(
+                "No utilice texto transcrito; adjunte obligatoriamente la imagen de historia clínica."
+            )
+        if not second_file_url:
+            raise bad_request("Debe adjuntar la imagen adicional de historia clínica.")
+    elif kind == LongAbsenceDocumentKind.INCAPACIDAD_EPS.value:
+        if txt:
+            raise bad_request(
+                "No utilice texto transcrito; adjunte obligatoriamente la foto del documento de incapacidad EPS."
+            )
+        if not second_file_url:
+            raise bad_request("Debe adjuntar la foto de la incapacidad transcrita por EPS.")
 
 
 def _snapshot(note: IncapacityNote) -> str:
@@ -27,12 +95,18 @@ def _snapshot(note: IncapacityNote) -> str:
         {
             "employee_id": note.employee_id,
             "type": note.type,
+            "temporal_category_id": note.temporal_category_id,
+            "eps_arl_id": note.eps_arl_id,
+            "diagnosis_id": note.diagnosis_id,
             "description": note.description,
             "support": note.support,
             "start_date": str(note.start_date),
             "end_date": str(note.end_date) if note.end_date else None,
             "status": note.status,
             "file_url": note.file_url,
+            "long_absence_document_kind": note.long_absence_document_kind,
+            "long_absence_second_file_url": note.long_absence_second_file_url,
+            "long_absence_eps_transcribed_text": note.long_absence_eps_transcribed_text,
         }
     )
 
@@ -56,6 +130,16 @@ async def _add_history(
     db.add(h)
 
 
+async def list_leader_filter_options(db: AsyncSession) -> list[tuple[int, str]]:
+    """Usuarios activos con rol líder (para selector en listado de incapacidades)."""
+    r = await db.execute(
+        select(User.id, User.name)
+        .where(User.role == Role.LEADER.value, User.status == EntityStatus.ACTIVE.value)
+        .order_by(User.name.asc(), User.id.asc())
+    )
+    return [(row[0], row[1]) for row in r.all()]
+
+
 async def get_note(db: AsyncSession, note_id: int) -> IncapacityNote | None:
     r = await db.execute(
         select(IncapacityNote)
@@ -73,11 +157,28 @@ async def list_notes(
     page_size: int,
     employee_id: int | None = None,
     type_filter: str | None = None,
+    search: str | None = None,
+    leader_id: int | None = None,
 ) -> tuple[list[IncapacityNote], int]:
     q = select(IncapacityNote)
     count_q = select(func.count()).select_from(IncapacityNote)
 
-    if actor.role == Role.LEADER.value:
+    emp_join_needed = bool(search and search.strip()) or leader_id is not None
+    if emp_join_needed:
+        q = q.join(Employee, IncapacityNote.employee_id == Employee.id)
+        count_q = count_q.join(Employee, IncapacityNote.employee_id == Employee.id)
+
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        emp_cond = or_(Employee.name.ilike(term), Employee.identification_number.ilike(term))
+        q = q.where(emp_cond)
+        count_q = count_q.where(emp_cond)
+
+    if leader_id is not None:
+        q = q.where(Employee.leader_id == leader_id)
+        count_q = count_q.where(Employee.leader_id == leader_id)
+
+    if behavior_key(actor) == Role.LEADER.value:
         sub = select(Employee.id).where(Employee.area_id == actor.area_id)
         q = q.where(IncapacityNote.employee_id.in_(sub))
         count_q = count_q.where(IncapacityNote.employee_id.in_(sub))
@@ -94,7 +195,7 @@ async def list_notes(
         q.order_by(IncapacityNote.id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
-        .options(*_INC_BASE)
+        .options(*_INC_LIST)
     )
     rows = (await db.execute(q)).scalars().all()
     return list(rows), total
@@ -105,7 +206,7 @@ async def ensure_employee_scope(db: AsyncSession, actor: User, employee_id: int)
     emp = er.scalar_one_or_none()
     if not emp:
         raise bad_request("Empleado no encontrado")
-    if actor.role == Role.LEADER.value and emp.area_id != actor.area_id:
+    if behavior_key(actor) == Role.LEADER.value and emp.area_id != actor.area_id:
         raise forbidden("El empleado no está en su área")
     return emp
 
@@ -115,18 +216,44 @@ async def create_note(
     actor: User,
     data: IncapacityNoteCreate,
     file_url: str | None,
+    *,
+    long_absence_second_file_url: str | None = None,
 ) -> IncapacityNote:
-    if actor.role == Role.LEADER.value:
+    if behavior_key(actor) == Role.LEADER.value:
         await ensure_employee_scope(db, actor, data.employee_id)
-    elif actor.role in (Role.ADMIN.value, Role.HR.value, Role.MANAGEMENT.value):
+    elif behavior_key(actor) in (Role.ADMIN.value, Role.HR.value, Role.MANAGEMENT.value):
         er = await db.execute(select(Employee).where(Employee.id == data.employee_id))
         if not er.scalar_one_or_none():
             raise bad_request("Empleado no encontrado")
     else:
         raise forbidden("No tiene permiso para crear este registro")
 
+    await validate_note_catalog_refs(
+        db,
+        temporal_category_id=data.temporal_category_id,
+        eps_arl_id=data.eps_arl_id,
+        diagnosis_id=data.diagnosis_id,
+    )
+
+    kind_val = data.long_absence_document_kind.value if data.long_absence_document_kind else None
+    validate_long_absence_document_rules(
+        start=data.start_date,
+        end=data.end_date,
+        kind=kind_val,
+    )
+
+    days = inclusive_incapacity_days(data.start_date, data.end_date)
+    if not file_url or not str(file_url).strip():
+        raise bad_request("Debe adjuntar la imagen de soporte de la incapacidad.")
+    validate_long_absence_supports(
+        days=days,
+        kind=kind_val,
+        second_file_url=long_absence_second_file_url,
+        eps_transcribed_text=None,
+    )
+
     # Solo gerencia o administración pueden dejar registros ya aprobados/rechazados; el resto queda pendiente.
-    if actor.role in (Role.MANAGEMENT.value, Role.ADMIN.value):
+    if behavior_key(actor) in (Role.MANAGEMENT.value, Role.ADMIN.value):
         status_val = data.status.value
     else:
         status_val = EntityStatus.PENDING.value
@@ -134,10 +261,16 @@ async def create_note(
     note = IncapacityNote(
         employee_id=data.employee_id,
         type=data.type.value,
+        temporal_category_id=data.temporal_category_id,
+        eps_arl_id=data.eps_arl_id,
+        diagnosis_id=data.diagnosis_id,
         description=data.description,
         support=(data.support.strip() if data.support and data.support.strip() else None),
         start_date=data.start_date,
         end_date=data.end_date,
+        long_absence_document_kind=kind_val,
+        long_absence_second_file_url=long_absence_second_file_url,
+        long_absence_eps_transcribed_text=None,
         file_url=file_url,
         created_by=actor.id,
         status=status_val,
@@ -181,10 +314,36 @@ async def update_note(
         note.start_date = data.start_date
     if data.end_date is not None:
         note.end_date = data.end_date
+    if "temporal_category_id" in data.model_fields_set:
+        if data.temporal_category_id is None:
+            raise bad_request("La categoría temporal es obligatoria")
+        note.temporal_category_id = data.temporal_category_id
+    if "eps_arl_id" in data.model_fields_set:
+        note.eps_arl_id = data.eps_arl_id
+    if "diagnosis_id" in data.model_fields_set:
+        note.diagnosis_id = data.diagnosis_id
+    if "long_absence_document_kind" in data.model_fields_set:
+        note.long_absence_document_kind = (
+            data.long_absence_document_kind.value if data.long_absence_document_kind else None
+        )
+
+    await validate_note_catalog_refs(
+        db,
+        temporal_category_id=note.temporal_category_id,
+        eps_arl_id=note.eps_arl_id,
+        diagnosis_id=note.diagnosis_id,
+    )
+
+    validate_long_absence_document_rules(
+        start=note.start_date,
+        end=note.end_date,
+        kind=note.long_absence_document_kind,
+    )
+
     if data.status is not None:
         new_s = data.status.value
         if new_s in (EntityStatus.APPROVED.value, EntityStatus.REJECTED.value):
-            if actor.role not in (Role.MANAGEMENT.value, Role.ADMIN.value):
+            if behavior_key(actor) not in (Role.MANAGEMENT.value, Role.ADMIN.value):
                 raise forbidden("Solo gerencia o administración pueden aprobar o rechazar")
             if note.status != EntityStatus.PENDING.value:
                 raise bad_request("Solo se pueden aprobar o rechazar registros pendientes")
@@ -211,6 +370,10 @@ async def update_note(
         or data.support is not None
         or data.start_date is not None
         or data.end_date is not None
+        or "temporal_category_id" in data.model_fields_set
+        or "eps_arl_id" in data.model_fields_set
+        or "diagnosis_id" in data.model_fields_set
+        or "long_absence_document_kind" in data.model_fields_set
         or (data.status is not None and not decision)
     ):
         comment = "Se adjuntó un archivo" if file_url is not None and not any(
@@ -221,6 +384,10 @@ async def update_note(
                 data.start_date is not None,
                 data.end_date is not None,
                 data.status is not None,
+                "temporal_category_id" in data.model_fields_set,
+                "eps_arl_id" in data.model_fields_set,
+                "diagnosis_id" in data.model_fields_set,
+                "long_absence_document_kind" in data.model_fields_set,
             ]
         ) else None
         await _add_history(
@@ -244,19 +411,77 @@ async def ensure_employee_scope_for_read(
     emp = er.scalar_one_or_none()
     if not emp:
         raise not_found("Empleado no encontrado")
-    if actor.role == Role.LEADER.value and emp.area_id != actor.area_id:
+    if behavior_key(actor) == Role.LEADER.value and emp.area_id != actor.area_id:
         raise forbidden("No puede acceder a este registro")
     return emp
 
 
 def can_modify_note(actor: User, note: IncapacityNote, emp: Employee) -> bool:
-    if actor.role in (Role.ADMIN.value, Role.HR.value):
+    if behavior_key(actor) in (Role.ADMIN.value, Role.HR.value):
         return True
-    if actor.role == Role.LEADER.value:
+    if behavior_key(actor) == Role.LEADER.value:
         return emp.area_id == actor.area_id and note.created_by == actor.id
-    if actor.role == Role.MANAGEMENT.value:
+    if behavior_key(actor) == Role.MANAGEMENT.value:
         return True
     return False
+
+
+async def create_extension(
+    db: AsyncSession,
+    actor: User,
+    note_id: int,
+    *,
+    start_date: date,
+    end_date: date,
+    file_url: str,
+    note_text: str,
+) -> IncapacityExtension:
+    note = await get_note(db, note_id)
+    if not note:
+        raise not_found("Registro no encontrado")
+    await ensure_employee_scope_for_read(db, actor, note)
+    if end_date < start_date:
+        raise bad_request("La fecha fin no puede ser anterior a la fecha de inicio.")
+    incap_fin = note.end_date if note.end_date is not None else note.start_date
+    if start_date < incap_fin:
+        raise bad_request(
+            "La fecha de inicio de la prórroga debe ser igual o posterior a la fecha fin de la incapacidad."
+        )
+    if end_date < incap_fin:
+        raise bad_request(
+            "La fecha fin de la prórroga debe ser igual o posterior a la fecha fin de la incapacidad."
+        )
+
+    ext = IncapacityExtension(
+        incapacity_id=note_id,
+        start_date=start_date,
+        end_date=end_date,
+        file_url=file_url,
+        note=note_text.strip(),
+        created_by=actor.id,
+    )
+    db.add(ext)
+    await db.flush()
+    snap = json.dumps(
+        {
+            "extension_id": ext.id,
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "note": note_text.strip(),
+            "file_url": file_url,
+        },
+        ensure_ascii=False,
+    )
+    await _add_history(
+        db,
+        note_id,
+        IncapacityHistoryAction.EXTENSION_ADDED.value,
+        actor.id,
+        f"Prórroga registrada ({start_date} → {end_date})",
+        snap,
+    )
+    await db.refresh(ext)
+    return ext
 
 
 async def add_comment(

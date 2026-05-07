@@ -5,12 +5,14 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import unauthorized
 from app.core.security import decode_token, verify_token_type
 from app.db.session import get_db
 from app.models.enums import Role
 from app.models.user import User
+from app.services import rbac_service
 
 security = HTTPBearer(auto_error=False)
 
@@ -28,7 +30,9 @@ async def get_current_user_optional(
     if not verify_token_type(payload, "access"):
         return None
     uid = int(payload.get("sub", 0))
-    r = await db.execute(select(User).where(User.id == uid))
+    r = await db.execute(
+        select(User).options(selectinload(User.profile)).where(User.id == uid)
+    )
     return r.scalar_one_or_none()
 
 
@@ -41,10 +45,25 @@ async def get_current_user(
 
 
 def require_roles(*roles: Role) -> Callable[..., User]:
+    """Compatibilidad: exige que behavior_key coincida con uno de los roles clásicos."""
     allowed = {r.value for r in roles}
 
     async def _inner(user: User = Depends(get_current_user)) -> User:
-        if user.role not in allowed:
+        if rbac_service.behavior_key(user) not in allowed:
+            raise HTTPException(status_code=403, detail="Permisos insuficientes")
+        return user
+
+    return _inner
+
+
+def require_any_permission(*codes: str) -> Callable[..., User]:
+    """El usuario debe tener al menos uno de los permisos indicados."""
+
+    async def _inner(
+        user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[AsyncSession, Depends(get_db)],
+    ) -> User:
+        if not await rbac_service.user_has_any_permission(db, user, *codes):
             raise HTTPException(status_code=403, detail="Permisos insuficientes")
         return user
 

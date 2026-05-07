@@ -4,12 +4,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import client_ip, get_current_user, require_roles
+from app.api.deps import client_ip, get_current_user, require_any_permission
 from app.db.session import get_db
-from app.models.enums import Role
 from app.models.user import User
 from app.schemas.area import AreaCreate, AreaRead, AreaUpdate
 from app.schemas.common import PaginatedResponse
+from app.realtime.notify import broadcast_data_changed
 from app.services import audit_service
 from app.services import area_service as svc
 
@@ -48,7 +48,7 @@ async def create_area(
     request: Request,
     body: AreaCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current: Annotated[User, Depends(require_roles(Role.ADMIN, Role.HR))],
+    current: Annotated[User, Depends(require_any_permission("areas.create"))],
 ) -> AreaRead:
     a = await svc.create_area(db, body)
     await audit_service.write_audit(
@@ -60,6 +60,7 @@ async def create_area(
         ip_address=client_ip(request),
     )
     await db.commit()
+    await broadcast_data_changed(["areas"])
     return AreaRead.model_validate(a)
 
 
@@ -83,7 +84,7 @@ async def update_area(
     area_id: int,
     body: AreaUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current: Annotated[User, Depends(require_roles(Role.ADMIN, Role.HR))],
+    current: Annotated[User, Depends(require_any_permission("areas.edit"))],
 ) -> AreaRead:
     a = await svc.update_area(db, area_id, body)
     await audit_service.write_audit(
@@ -95,6 +96,7 @@ async def update_area(
         ip_address=client_ip(request),
     )
     await db.commit()
+    await broadcast_data_changed(["areas"])
     return AreaRead.model_validate(a)
 
 
@@ -103,7 +105,7 @@ async def delete_area(
     request: Request,
     area_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current: Annotated[User, Depends(require_roles(Role.ADMIN, Role.HR))],
+    current: Annotated[User, Depends(require_any_permission("areas.delete"))],
 ) -> dict[str, str]:
     await svc.delete_area(db, area_id)
     await audit_service.write_audit(
@@ -115,4 +117,5 @@ async def delete_area(
         ip_address=client_ip(request),
     )
     await db.commit()
+    await broadcast_data_changed(["areas"])
     return {"detail": "Operación correcta"}

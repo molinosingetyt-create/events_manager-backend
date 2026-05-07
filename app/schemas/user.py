@@ -2,13 +2,13 @@ from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field
 
-from app.models.enums import EntityStatus, Role
+from app.models.enums import EntityStatus
 
 
 class UserBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     email: EmailStr
-    role: Role
+    role: str = Field(min_length=1, max_length=64, description="Código de perfil (p. ej. ADMIN, HR)")
     area_id: int
     status: EntityStatus = EntityStatus.ACTIVE
 
@@ -21,7 +21,7 @@ class UserUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     email: EmailStr | None = None
     password: str | None = Field(default=None, min_length=8, max_length=128)
-    role: Role | None = None
+    role: str | None = Field(default=None, min_length=1, max_length=64)
     area_id: int | None = None
     status: EntityStatus | None = None
 

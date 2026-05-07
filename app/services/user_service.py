@@ -4,8 +4,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import bad_request, not_found
 from app.core.security import get_password_hash
 from app.models.enums import EntityStatus, Role
+from app.models.profile import Profile
 from app.models.user import User
 from app.schemas.user import UserCreate, UserUpdate
+
+
+async def get_profile_by_code(db: AsyncSession, code: str) -> Profile | None:
+    r = await db.execute(select(Profile).where(Profile.code == code))
+    return r.scalar_one_or_none()
 
 
 async def get_user(db: AsyncSession, user_id: int) -> User | None:
@@ -40,11 +46,16 @@ async def create_user(db: AsyncSession, data: UserCreate) -> User:
     if existing.scalar_one_or_none():
         raise bad_request("El correo ya está registrado")
 
+    profile = await get_profile_by_code(db, data.role.strip().upper())
+    if not profile:
+        raise bad_request("Perfil no válido")
+
     user = User(
         name=data.name,
         email=data.email,
         hashed_password=get_password_hash(data.password),
-        role=data.role.value,
+        role=profile.code,
+        profile_id=profile.id,
         area_id=data.area_id,
         status=data.status.value,
     )
@@ -69,7 +80,11 @@ async def update_user(db: AsyncSession, user_id: int, data: UserUpdate) -> User:
     if data.password is not None:
         user.hashed_password = get_password_hash(data.password)
     if data.role is not None:
-        user.role = data.role.value
+        profile = await get_profile_by_code(db, data.role.strip().upper())
+        if not profile:
+            raise bad_request("Perfil no válido")
+        user.role = profile.code
+        user.profile_id = profile.id
     if data.area_id is not None:
         user.area_id = data.area_id
     if data.status is not None:
@@ -89,4 +104,6 @@ async def delete_user(db: AsyncSession, user_id: int) -> None:
 
 
 def can_create_users(actor: User) -> bool:
-    return actor.role in (Role.ADMIN.value, Role.HR.value)
+    from app.services.rbac_service import behavior_key
+
+    return behavior_key(actor) in (Role.ADMIN.value, Role.HR.value)

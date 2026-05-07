@@ -20,6 +20,7 @@ _OT_LOAD = (
 )
 from app.schemas.overtime import OvertimeApproveReject, OvertimeRequestCreate, OvertimeRequestUpdate
 from app.services import notification_service as notif_svc
+from app.services.rbac_service import behavior_key
 
 
 def _snapshot(req: OvertimeRequest) -> str:
@@ -53,7 +54,7 @@ async def _add_history(
 
 
 async def ensure_can_view(db: AsyncSession, actor: User, req: OvertimeRequest) -> None:
-    if actor.role == Role.LEADER.value:
+    if behavior_key(actor) == Role.LEADER.value:
         er = await db.execute(select(Employee).where(Employee.id == req.employee_id))
         emp = er.scalar_one_or_none()
         if not emp or emp.area_id != actor.area_id:
@@ -81,7 +82,7 @@ async def list_requests(
     q = select(OvertimeRequest)
     count_q = select(func.count()).select_from(OvertimeRequest)
 
-    if actor.role == Role.LEADER.value:
+    if behavior_key(actor) == Role.LEADER.value:
         sub = select(Employee.id).where(Employee.area_id == actor.area_id)
         q = q.where(OvertimeRequest.employee_id.in_(sub))
         count_q = count_q.where(OvertimeRequest.employee_id.in_(sub))
@@ -117,14 +118,14 @@ async def create_request(db: AsyncSession, actor: User, data: OvertimeRequestCre
         Role.HR.value,
         Role.MANAGEMENT.value,
     )
-    if actor.role not in allowed_create:
+    if behavior_key(actor) not in allowed_create:
         raise forbidden("No tiene permiso para crear solicitudes de horas extra")
 
     er = await db.execute(select(Employee).where(Employee.id == data.employee_id))
     emp = er.scalar_one_or_none()
     if not emp:
         raise bad_request("Empleado no encontrado")
-    if actor.role == Role.LEADER.value and emp.area_id != actor.area_id:
+    if behavior_key(actor) == Role.LEADER.value and emp.area_id != actor.area_id:
         raise forbidden("El empleado debe pertenecer a su área")
 
     req = OvertimeRequest(
@@ -154,7 +155,7 @@ async def create_request(db: AsyncSession, actor: User, data: OvertimeRequestCre
         request_date=str(req.date),
         hours=str(req.hours),
         exclude_user_id=actor.id
-        if actor.role in (Role.ADMIN.value, Role.MANAGEMENT.value)
+        if behavior_key(actor) in (Role.ADMIN.value, Role.MANAGEMENT.value)
         else None,
     )
     await db.commit()
@@ -172,14 +173,14 @@ async def update_request(
     if req.status != EntityStatus.PENDING.value:
         raise bad_request("Solo se pueden editar solicitudes pendientes")
 
-    if actor.role == Role.LEADER.value:
+    if behavior_key(actor) == Role.LEADER.value:
         if req.requested_by != actor.id:
             raise forbidden("No puede editar esta solicitud")
         er = await db.execute(select(Employee).where(Employee.id == req.employee_id))
         emp = er.scalar_one_or_none()
         if not emp or emp.area_id != actor.area_id:
             raise forbidden("Solicitud no válida")
-    elif actor.role in (Role.ADMIN.value, Role.HR.value, Role.MANAGEMENT.value):
+    elif behavior_key(actor) in (Role.ADMIN.value, Role.HR.value, Role.MANAGEMENT.value):
         pass
     else:
         raise forbidden("No puede editar esta solicitud")
@@ -207,7 +208,7 @@ async def update_request(
 async def approve_or_reject(
     db: AsyncSession, actor: User, request_id: int, body: OvertimeApproveReject
 ) -> OvertimeRequest:
-    if actor.role not in (Role.MANAGEMENT.value, Role.ADMIN.value):
+    if behavior_key(actor) not in (Role.MANAGEMENT.value, Role.ADMIN.value):
         raise forbidden("Solo gerencia o administración pueden aprobar o rechazar solicitudes de horas extra")
 
     req = await get_request(db, request_id)
@@ -245,7 +246,7 @@ async def delete_request(db: AsyncSession, actor: User, request_id: int) -> None
     req = await get_request(db, request_id)
     if not req:
         raise not_found("Solicitud de horas extra no encontrada")
-    if actor.role not in (Role.ADMIN.value, Role.HR.value):
+    if behavior_key(actor) not in (Role.ADMIN.value, Role.HR.value):
         raise forbidden("No tiene permiso para eliminar")
     await db.execute(delete(OvertimeRequest).where(OvertimeRequest.id == request_id))
     await db.commit()

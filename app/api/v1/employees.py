@@ -4,13 +4,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import client_ip, get_current_user, require_roles
+from app.api.deps import client_ip, get_current_user, require_any_permission
 from app.db.session import get_db
 from app.models.employee import Employee
-from app.models.enums import Role
 from app.models.user import User
 from app.schemas.common import PaginatedResponse
 from app.schemas.employee import EmployeeCreate, EmployeeRead, EmployeeUpdate
+from app.realtime.notify import broadcast_data_changed
 from app.services import audit_service
 from app.services import employee_service as svc
 
@@ -20,6 +20,7 @@ router = APIRouter()
 def _employee_read(e: Employee) -> EmployeeRead:
     area_name = e.area.name if e.area is not None else ""
     leader_name = e.leader_user.name if e.leader_user is not None else None
+    temporal_name = e.temporal_category.name if e.temporal_category is not None else ""
     return EmployeeRead(
         id=e.id,
         name=e.name,
@@ -29,6 +30,8 @@ def _employee_read(e: Employee) -> EmployeeRead:
         area_name=area_name,
         leader_id=e.leader_id,
         leader_name=leader_name,
+        temporal_category_id=e.temporal_category_id,
+        temporal_category_name=temporal_name,
         status=e.status,
         created_at=e.created_at,
         updated_at=e.updated_at,
@@ -44,6 +47,7 @@ async def list_employees(
     page_size: int = Query(20, ge=1, le=200),
     area_id: int | None = None,
     leader_id: int | None = None,
+    search: str | None = Query(None, description="Buscar por nombre o número de identificación"),
 ) -> PaginatedResponse[EmployeeRead]:
     items, total = await svc.list_employees_for_actor(
         db,
@@ -52,6 +56,7 @@ async def list_employees(
         page_size=page_size,
         area_id=area_id,
         leader_id=leader_id,
+        search=search,
     )
     await audit_service.write_audit(
         db,
@@ -76,9 +81,9 @@ async def create_employee(
     request: Request,
     body: EmployeeCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current: Annotated[User, Depends(require_roles(Role.ADMIN, Role.HR))],
+    current: Annotated[User, Depends(require_any_permission("employees.create"))],
 ) -> EmployeeRead:
-    e = await svc.create_employee(db, body)
+    e = await svc.create_employee(db, body, actor=current)
     await audit_service.write_audit(
         db,
         user_id=current.id,
@@ -88,6 +93,7 @@ async def create_employee(
         ip_address=client_ip(request),
     )
     await db.commit()
+    await broadcast_data_changed(["employees"])
     return _employee_read(e)
 
 
@@ -122,14 +128,14 @@ async def update_employee(
     employee_id: int,
     body: EmployeeUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current: Annotated[User, Depends(require_roles(Role.ADMIN, Role.HR))],
+    current: Annotated[User, Depends(require_any_permission("employees.edit"))],
 ) -> EmployeeRead:
     e = await svc.get_employee(db, employee_id)
     if not e:
         from app.core.exceptions import not_found
 
         raise not_found()
-    e2 = await svc.update_employee(db, employee_id, body)
+    e2 = await svc.update_employee(db, employee_id, body, actor=current)
     await audit_service.write_audit(
         db,
         user_id=current.id,
@@ -139,6 +145,7 @@ async def update_employee(
         ip_address=client_ip(request),
     )
     await db.commit()
+    await broadcast_data_changed(["employees"])
     return _employee_read(e2)
 
 
@@ -147,7 +154,7 @@ async def delete_employee(
     request: Request,
     employee_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current: Annotated[User, Depends(require_roles(Role.ADMIN, Role.HR))],
+    current: Annotated[User, Depends(require_any_permission("employees.delete"))],
 ) -> dict[str, str]:
     await svc.delete_employee(db, employee_id)
     await audit_service.write_audit(
@@ -159,4 +166,5 @@ async def delete_employee(
         ip_address=client_ip(request),
     )
     await db.commit()
+    await broadcast_data_changed(["employees"])
     return {"detail": "Operación correcta"}

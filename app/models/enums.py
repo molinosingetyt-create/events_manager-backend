@@ -17,8 +17,15 @@ class EntityStatus(str, enum.Enum):
 
 
 class IncapacityType(str, enum.Enum):
-    INCAPACITY = "incapacity"
-    NOTE = "note"
+    GENERAL_ILLNESS = "general_illness"
+    WORK_ACCIDENT = "work_accident"
+
+
+class LongAbsenceDocumentKind(str, enum.Enum):
+    """Documentación exigida cuando la incapacidad es de 3 o más días (inclusive)."""
+
+    HISTORIA_CLINICA = "historia_clinica"
+    INCAPACIDAD_EPS = "incapacidad_eps"
 
 
 class OvertimeHistoryAction(str, enum.Enum):
@@ -33,6 +40,14 @@ class IncapacityHistoryAction(str, enum.Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
     UPDATED = "updated"
+    EXTENSION_ADDED = "extension_added"
+
+
+class EpsArlKind(str, enum.Enum):
+    """Tipo de entidad de salud / riesgos laborales."""
+
+    EPS = "eps"
+    ARL = "arl"
 
 
 class AppNotificationKind(str, enum.Enum):
