@@ -12,47 +12,25 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import inspect, text
 
+from app.db.rbac_seed import seed_rbac_sync
+
 revision: str = "006"
 down_revision: Union[str, None] = "005"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-PERMISSIONS = [
-    ("users.view", "Ver usuarios"),
-    ("users.create", "Crear usuarios"),
-    ("users.edit", "Editar usuarios"),
-    ("users.delete", "Eliminar / desactivar usuarios"),
-    ("employees.view", "Ver empleados"),
-    ("employees.create", "Crear empleados"),
-    ("employees.edit", "Editar empleados"),
-    ("employees.delete", "Eliminar empleados"),
-    ("areas.view", "Ver áreas"),
-    ("areas.create", "Crear áreas"),
-    ("areas.edit", "Editar áreas"),
-    ("areas.delete", "Eliminar áreas"),
-    ("overtime.view", "Ver horas extra"),
-    ("overtime.create", "Crear solicitudes de horas extra"),
-    ("overtime.edit", "Editar horas extra"),
-    ("overtime.delete", "Eliminar horas extra"),
-    ("overtime.approve", "Aprobar / rechazar horas extra"),
-    ("incapacity.view", "Ver incapacidades y notas"),
-    ("incapacity.create", "Crear incapacidades / notas"),
-    ("incapacity.edit", "Editar incapacidades / notas"),
-    ("incapacity.delete", "Eliminar incapacidades / notas"),
-    ("incapacity.approve", "Aprobar / rechazar incapacidades"),
-    ("catalog.settings", "Catálogos (temporal, EPS/ARL, diagnósticos)"),
-    ("security.profiles", "Administrar perfiles"),
-    ("security.permissions", "Administrar permisos"),
-]
-
-
 def upgrade() -> None:
     bind = op.get_bind()
     insp = inspect(bind)
-    # No usar solo "si existe permissions": otra tabla homónima o un intento previo podía dejar users sin profile_id.
-    user_cols = {c["name"] for c in insp.get_columns("users")}
-    if "profile_id" in user_cols:
+    tables = insp.get_table_names()
+
+    if "permissions" in tables:
+        perm_count = bind.execute(text("SELECT COUNT(*) FROM permissions")).scalar() or 0
+        if perm_count > 0:
+            return
+        # Tablas creadas por create_all (p. ej.) pero sin datos RBAC
+        seed_rbac_sync(bind)
         return
 
     op.create_table(
@@ -94,77 +72,7 @@ def upgrade() -> None:
     )
 
     conn = op.get_bind()
-    for i, (code, name) in enumerate(PERMISSIONS):
-        conn.execute(
-            text(
-                """
-                INSERT INTO permissions (code, name, description, is_system, sort_order)
-                VALUES (:code, :name, NULL, true, :so)
-                """
-            ),
-            {"code": code, "name": name, "so": i},
-        )
-
-    profiles_seed = [
-        ("ADMIN", "Administrador", "Acceso completo y catálogos", "ADMIN"),
-        ("HR", "Recursos humanos", "Gestión de personas y registros", "HR"),
-        ("MANAGEMENT", "Gerencia", "Aprobaciones y visión global", "MANAGEMENT"),
-        ("LEADER", "Líder", "Equipo y área asignada", "LEADER"),
-    ]
-    for i, (code, name, desc, bk) in enumerate(profiles_seed):
-        conn.execute(
-            text(
-                """
-                INSERT INTO profiles (code, name, description, behavior_key, is_system, sort_order)
-                VALUES (:code, :name, :desc, :bk, true, :so)
-                """
-            ),
-            {"code": code, "name": name, "desc": desc, "bk": bk, "so": i},
-        )
-
-    all_codes = [p[0] for p in PERMISSIONS]
-
-    admin_codes = all_codes
-    hr_codes = [c for c in all_codes if c not in ("overtime.approve", "incapacity.approve", "catalog.settings", "security.profiles", "security.permissions")]
-    mgmt_codes = [
-        "users.view",
-        "employees.view",
-        "overtime.view",
-        "overtime.create",
-        "overtime.edit",
-        "overtime.approve",
-        "incapacity.view",
-        "incapacity.create",
-        "incapacity.edit",
-    ]
-    leader_codes = [
-        "employees.view",
-        "overtime.view",
-        "overtime.create",
-        "overtime.edit",
-        "incapacity.view",
-        "incapacity.create",
-        "incapacity.edit",
-    ]
-
-    for profile_code, codes in [
-        ("ADMIN", admin_codes),
-        ("HR", hr_codes),
-        ("MANAGEMENT", mgmt_codes),
-        ("LEADER", leader_codes),
-    ]:
-        pid = conn.execute(text("SELECT id FROM profiles WHERE code = :c"), {"c": profile_code}).scalar_one()
-        for perm_code in codes:
-            rid = conn.execute(
-                text("SELECT id FROM permissions WHERE code = :c"),
-                {"c": perm_code},
-            ).scalar_one_or_none()
-            if rid is None:
-                continue
-            conn.execute(
-                text("INSERT INTO profile_permissions (profile_id, permission_id) VALUES (:p, :m)"),
-                {"p": pid, "m": rid},
-            )
+    seed_rbac_sync(conn)
 
     op.alter_column(
         "users",

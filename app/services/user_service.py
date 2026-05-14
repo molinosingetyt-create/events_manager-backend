@@ -1,4 +1,4 @@
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import bad_request, not_found
@@ -33,8 +33,15 @@ async def list_users(
         q = q.where(User.area_id == area_id)
         count_q = count_q.where(User.area_id == area_id)
     if role is not None:
-        q = q.where(User.role == role)
-        count_q = count_q.where(User.role == role)
+        # Coincidir con perfil (code / behavior_key), no solo la columna users.role,
+        # para alinear con rbac_service.behavior_key y listados de líderes en UI.
+        norm = role.strip().upper()
+        q = q.join(Profile, User.profile_id == Profile.id).where(
+            or_(Profile.code == norm, Profile.behavior_key == norm)
+        )
+        count_q = count_q.join(Profile, User.profile_id == Profile.id).where(
+            or_(Profile.code == norm, Profile.behavior_key == norm)
+        )
     total = (await db.execute(count_q)).scalar_one()
     q = q.order_by(User.id).offset((page - 1) * page_size).limit(page_size)
     rows = (await db.execute(q)).scalars().all()

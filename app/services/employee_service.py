@@ -14,10 +14,11 @@ from app.services.rbac_service import behavior_key
 async def validate_leader(
     db: AsyncSession,
     leader_id: int | None,
-    area_id: int,
+    _employee_area_id: int,
     *,
     actor: User,
 ) -> None:
+    """Usuario existe y está activo; salvo administración, debe tener comportamiento LÍDER (área del líder libre)."""
     if leader_id is None:
         return
     r = await db.execute(select(User).options(selectinload(User.profile)).where(User.id == leader_id))
@@ -26,8 +27,6 @@ async def validate_leader(
         raise bad_request("Usuario asignado no encontrado")
     if leader.status != EntityStatus.ACTIVE.value:
         raise bad_request("El usuario asignado debe estar activo")
-    if leader.area_id != area_id:
-        raise bad_request("El líder debe pertenecer al mismo área que el empleado")
     if behavior_key(actor) == Role.ADMIN.value:
         return
     if behavior_key(leader) != Role.LEADER.value:

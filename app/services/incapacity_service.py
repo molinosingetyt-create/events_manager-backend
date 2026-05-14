@@ -9,6 +9,7 @@ from app.core.exceptions import bad_request, forbidden, not_found
 from app.models.employee import Employee
 from app.models.enums import EntityStatus, IncapacityHistoryAction, LongAbsenceDocumentKind, Role
 from app.models.incapacity import IncapacityComment, IncapacityExtension, IncapacityNote, IncapacityNoteHistory
+from app.models.profile import Profile
 from app.models.user import User
 from app.schemas.incapacity import IncapacityCommentCreate, IncapacityNoteCreate, IncapacityNoteUpdate
 from app.services.incapacity_catalog_service import (
@@ -131,10 +132,11 @@ async def _add_history(
 
 
 async def list_leader_filter_options(db: AsyncSession) -> list[tuple[int, str]]:
-    """Usuarios activos con rol líder (para selector en listado de incapacidades)."""
+    """Usuarios activos con comportamiento de líder (perfil), alineado con validate_leader."""
     r = await db.execute(
         select(User.id, User.name)
-        .where(User.role == Role.LEADER.value, User.status == EntityStatus.ACTIVE.value)
+        .join(Profile, User.profile_id == Profile.id)
+        .where(Profile.behavior_key == Role.LEADER.value, User.status == EntityStatus.ACTIVE.value)
         .order_by(User.name.asc(), User.id.asc())
     )
     return [(row[0], row[1]) for row in r.all()]

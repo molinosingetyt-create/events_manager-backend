@@ -23,15 +23,15 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
 
     database_url: str = Field(
-        default="postgresql+asyncpg://postgres:postgres@localhost:5432/events_manager"
+        default="postgresql+asyncpg://production:nFM6sNgzHkzEWNS@eventsmanager.cij22sscyvr9.us-east-1.rds.amazonaws.com:5432/postgres"
     )
     sync_database_url: str = Field(
-        default="postgresql://postgres:postgres@localhost:5432/events_manager"
+        default="postgresql://production:nFM6sNgzHkzEWNS@eventsmanager.cij22sscyvr9.us-east-1.rds.amazonaws.com:5432/postgres"
     )
 
     # String en .env para evitar que pydantic-settings haga json.loads antes de validar.
     cors_origins_str: str = Field(
-        default="http://localhost:4200",
+        default="http://44.203.12.113:4200",
         validation_alias="CORS_ORIGINS",
     )
 
@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     def cors_origins(self) -> List[str]:
         s = self.cors_origins_str.strip()
         if not s:
-            return ["http://localhost:4200"]
+            return ["http://44.203.12.113:4200"]
         if s.startswith("["):
             return json.loads(s)
         return [x.strip() for x in s.split(",") if x.strip()]
