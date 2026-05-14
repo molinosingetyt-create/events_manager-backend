@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -5,8 +7,15 @@ from sqlalchemy.orm import selectinload
 from app.core.exceptions import bad_request, forbidden, not_found
 from app.models.employee import Employee
 from app.models.enums import EntityStatus, Role
+from app.models.profile import Profile
 from app.models.user import User
-from app.schemas.employee import EmployeeCreate, EmployeeUpdate
+from app.schemas.employee import (
+    EmployeeCreate,
+    EmployeeUpdate,
+    OrgChartMemberRead,
+    OrgChartNodeRead,
+    OrgChartTreeResponse,
+)
 from app.services.incapacity_catalog_service import require_active_temporal_category
 from app.services.rbac_service import behavior_key
 
@@ -161,5 +170,191 @@ async def delete_employee(db: AsyncSession, employee_id: int) -> None:
 def ensure_employee_access(actor: User, emp: Employee) -> None:
     if behavior_key(actor) == Role.LEADER.value and emp.leader_id != actor.id:
         raise forbidden("Solo puede ver empleados asignados a usted como líder")
+
+
+def _norm_person_name(value: str) -> str:
+    return " ".join((value or "").casefold().split())
+
+
+def _employee_matched_leader_user_id(
+    emp: Employee,
+    leaders_who_lead: set[int],
+    users_map: dict[int, User],
+) -> int | None:
+    """Si el empleado coincide con un usuario que también dirige equipo, devuelve ese `user.id`."""
+    en = _norm_person_name(emp.name)
+    matches: list[int] = []
+    for uid in leaders_who_lead:
+        u = users_map.get(uid)
+        if u is None:
+            continue
+        if _norm_person_name(u.name) == en:
+            matches.append(uid)
+    if not matches:
+        return None
+    return min(matches)
+
+
+async def get_organization_chart(db: AsyncSession) -> OrgChartTreeResponse:
+    """Árbol único desde gerencia: anida equipos cuando el empleado coincide con un usuario líder (mismo nombre)."""
+    r = await db.execute(select(Employee).options(selectinload(Employee.area)).order_by(Employee.name.asc()))
+    employees = list(r.scalars().all())
+
+    by_leader: dict[int | None, list[Employee]] = defaultdict(list)
+    for e in employees:
+        by_leader[e.leader_id].append(e)
+
+    unassigned_src = by_leader.pop(None, [])
+
+    leaders_who_lead: set[int] = {lid for lid in by_leader if lid is not None}
+
+    mgmt_r = await db.execute(
+        select(User)
+        .join(Profile, User.profile_id == Profile.id)
+        .where(Profile.behavior_key == Role.MANAGEMENT.value, User.status == EntityStatus.ACTIVE.value)
+        .options(selectinload(User.profile), selectinload(User.area))
+    )
+    mgmt_users = list(mgmt_r.scalars().all())
+
+    user_ids_to_load = set(leaders_who_lead) | {u.id for u in mgmt_users}
+    users_map: dict[int, User] = {}
+    if user_ids_to_load:
+        ur = await db.execute(
+            select(User)
+            .where(User.id.in_(user_ids_to_load))
+            .options(selectinload(User.profile), selectinload(User.area))
+        )
+        users_map = {u.id: u for u in ur.scalars().all()}
+
+    unassigned = [
+        OrgChartMemberRead(
+            id=e.id,
+            name=e.name,
+            position=e.position,
+            area_name=e.area.name if e.area is not None else "",
+        )
+        for e in sorted(unassigned_src, key=lambda x: x.name.lower())
+    ]
+
+    if not users_map:
+        return OrgChartTreeResponse(roots=[], unassigned=unassigned)
+
+    def build_employee_node(emp: Employee, placed: set[int]) -> OrgChartNodeRead:
+        uid_match = _employee_matched_leader_user_id(emp, leaders_who_lead, users_map)
+        children: list[OrgChartNodeRead] = []
+        if uid_match is not None and uid_match not in placed:
+            placed.add(uid_match)
+            for sub in sorted(by_leader.get(uid_match, []), key=lambda x: x.name.lower()):
+                children.append(build_employee_node(sub, placed))
+        area_name = emp.area.name if emp.area is not None else ""
+        return OrgChartNodeRead(
+            kind="employee",
+            user_id=None,
+            employee_id=emp.id,
+            name=emp.name,
+            position_label=emp.position,
+            area_name=area_name,
+            children=children,
+        )
+
+    def orphan_leader_ids_for_root(root_uid: int, placed: set[int]) -> list[int]:
+        root = users_map.get(root_uid)
+        if root is None:
+            return []
+        out: list[int] = []
+        for uid in sorted(leaders_who_lead):
+            if uid == root_uid or uid in placed:
+                continue
+            u = users_map.get(uid)
+            if u is None:
+                continue
+            if u.area_id != root.area_id:
+                continue
+            if behavior_key(u) == Role.MANAGEMENT.value:
+                continue
+            out.append(uid)
+        return out
+
+    def build_user_node(uid: int, placed: set[int], *, attach_area_orphans: bool) -> OrgChartNodeRead | None:
+        if uid in placed:
+            return None
+        u = users_map.get(uid)
+        if u is None:
+            return None
+        placed.add(uid)
+        pos = u.profile.name if u.profile is not None else u.role
+        area_name = u.area.name if u.area is not None else ""
+        children: list[OrgChartNodeRead] = []
+        for emp in sorted(by_leader.get(uid, []), key=lambda x: x.name.lower()):
+            children.append(build_employee_node(emp, placed))
+        if attach_area_orphans:
+            for ouid in orphan_leader_ids_for_root(uid, placed):
+                sub = build_user_node(ouid, placed, attach_area_orphans=False)
+                if sub is not None:
+                    children.append(sub)
+        return OrgChartNodeRead(
+            kind="user",
+            user_id=u.id,
+            employee_id=None,
+            name=u.name,
+            position_label=pos,
+            area_name=area_name,
+            children=children,
+        )
+
+    placed: set[int] = set()
+    mgmt_sorted = sorted(
+        mgmt_users,
+        key=lambda u: (0 if u.id in leaders_who_lead else 1, u.name.lower()),
+    )
+    first_mgmt_id = mgmt_sorted[0].id if mgmt_sorted else None
+
+    roots: list[OrgChartNodeRead] = []
+    for mu in mgmt_sorted:
+        node = build_user_node(mu.id, placed, attach_area_orphans=(mu.id == first_mgmt_id))
+        if node is None:
+            continue
+        has_direct = mu.id in by_leader and len(by_leader[mu.id]) > 0
+        if not node.children and not has_direct:
+            continue
+        roots.append(node)
+
+    if not roots and leaders_who_lead:
+        placed.clear()
+        ordered = sorted(
+            leaders_who_lead,
+            key=lambda i: ((users_map[i].name.lower() if users_map.get(i) else ""), i),
+        )
+        first_uid = ordered[0]
+        forest = []
+        for uid in ordered:
+            n = build_user_node(uid, placed, attach_area_orphans=(uid == first_uid))
+            if n is not None:
+                forest.append(n)
+        if len(forest) > 1:
+            roots = [
+                OrgChartNodeRead(
+                    kind="group",
+                    name="Organización",
+                    position_label="Equipos",
+                    area_name="",
+                    children=forest,
+                )
+            ]
+        else:
+            roots = forest
+
+    if len(roots) > 1:
+        roots = [
+            OrgChartNodeRead(
+                kind="group",
+                name="Dirección",
+                position_label="Gerencia",
+                area_name="",
+                children=roots,
+            )
+        ]
+
+    return OrgChartTreeResponse(roots=roots, unassigned=unassigned)
 
 

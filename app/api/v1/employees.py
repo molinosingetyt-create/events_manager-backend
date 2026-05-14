@@ -9,7 +9,7 @@ from app.db.session import get_db
 from app.models.employee import Employee
 from app.models.user import User
 from app.schemas.common import PaginatedResponse
-from app.schemas.employee import EmployeeCreate, EmployeeRead, EmployeeUpdate
+from app.schemas.employee import EmployeeCreate, EmployeeRead, EmployeeUpdate, OrgChartTreeResponse
 from app.realtime.notify import broadcast_data_changed
 from app.services import audit_service
 from app.services import employee_service as svc
@@ -74,6 +74,24 @@ async def list_employees(
         page_size=page_size,
         pages=pages,
     )
+
+
+@router.get("/org-chart", response_model=OrgChartTreeResponse)
+async def get_organization_chart(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current: Annotated[User, Depends(require_any_permission("employees.org_chart"))],
+) -> OrgChartTreeResponse:
+    data = await svc.get_organization_chart(db)
+    await audit_service.write_audit(
+        db,
+        user_id=current.id,
+        action="employees.org_chart",
+        entity_type="employee",
+        ip_address=client_ip(request),
+    )
+    await db.commit()
+    return data
 
 
 @router.post("", response_model=EmployeeRead)

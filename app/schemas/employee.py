@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -45,3 +45,34 @@ class EmployeeRead(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class OrgChartMemberRead(BaseModel):
+    """Colaborador bajo un líder (empleado)."""
+
+    id: int
+    name: str
+    position: str
+    area_name: str = ""
+
+
+class OrgChartNodeRead(BaseModel):
+    """Nodo recursivo del organigrama (grupo, usuario o empleado)."""
+
+    kind: Literal["group", "user", "employee"]
+    user_id: int | None = None
+    employee_id: int | None = None
+    name: str
+    position_label: str
+    area_name: str = ""
+    children: list["OrgChartNodeRead"] = Field(default_factory=list)
+
+
+OrgChartNodeRead.model_rebuild()
+
+
+class OrgChartTreeResponse(BaseModel):
+    """Árbol único desde gerencia; `roots` suele tener un elemento o un grupo «Dirección»."""
+
+    roots: list[OrgChartNodeRead]
+    unassigned: list[OrgChartMemberRead]
