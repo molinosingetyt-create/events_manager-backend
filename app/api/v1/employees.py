@@ -48,6 +48,10 @@ async def list_employees(
     area_id: int | None = None,
     leader_id: int | None = None,
     search: str | None = Query(None, description="Buscar por nombre o número de identificación"),
+    team_only: bool = Query(
+        False,
+        description="Solo empleados asignados al usuario como líder (ignora area_id)",
+    ),
 ) -> PaginatedResponse[EmployeeRead]:
     items, total = await svc.list_employees_for_actor(
         db,
@@ -57,6 +61,7 @@ async def list_employees(
         area_id=area_id,
         leader_id=leader_id,
         search=search,
+        team_only=team_only,
     )
     await audit_service.write_audit(
         db,

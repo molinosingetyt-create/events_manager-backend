@@ -13,7 +13,9 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.enums import LongAbsenceDocumentKind
 from app.models.user import User
+from app.api.v1.employees import _employee_read
 from app.schemas.common import PaginatedResponse
+from app.schemas.employee import EmployeeRead
 from app.schemas.incapacity import (
     IncapacityCommentCreate,
     IncapacityCommentRead,
@@ -186,6 +188,37 @@ async def leader_filter_options(
     """Líderes de usuario (activos) para filtrar incapacidades por colaborador asignado."""
     rows = await svc.list_leader_filter_options(db)
     return [LeaderFilterOption(id=i, name=n) for i, n in rows]
+
+
+@router.get("/assignable-employees", response_model=PaginatedResponse[EmployeeRead])
+async def list_assignable_employees(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current: Annotated[User, Depends(require_any_permission("incapacity.create"))],
+    page: int = Query(1, ge=1),
+    page_size: int = Query(200, ge=1, le=500),
+    search: str | None = Query(None, description="Buscar por nombre o número de identificación"),
+) -> PaginatedResponse[EmployeeRead]:
+    """Empleados del equipo del líder (sin filtro por área) para el formulario de incapacidades."""
+    items, total = await svc.list_assignable_employees(
+        db, current, page=page, page_size=page_size, search=search
+    )
+    await audit_service.write_audit(
+        db,
+        user_id=current.id,
+        action="incapacity.assignable_employees",
+        entity_type="employee",
+        ip_address=client_ip(request),
+    )
+    await db.commit()
+    pages = math.ceil(total / page_size) if page_size else None
+    return PaginatedResponse(
+        items=[_employee_read(e) for e in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+        pages=pages,
+    )
 
 
 @router.get("", response_model=PaginatedResponse[IncapacityNoteRead])

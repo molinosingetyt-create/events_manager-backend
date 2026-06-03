@@ -20,6 +20,11 @@ _OT_LOAD = (
 )
 from app.schemas.overtime import OvertimeApproveReject, OvertimeRequestCreate, OvertimeRequestUpdate
 from app.services import notification_service as notif_svc
+from app.services.employee_service import (
+    acts_as_team_leader,
+    ensure_employee_access,
+    list_assignable_employees_for_actor,
+)
 from app.services.rbac_service import behavior_key
 
 
@@ -53,12 +58,26 @@ async def _add_history(
     db.add(h)
 
 
+async def list_assignable_employees(
+    db: AsyncSession,
+    actor: User,
+    *,
+    page: int,
+    page_size: int,
+    search: str | None = None,
+) -> tuple[list[Employee], int]:
+    return await list_assignable_employees_for_actor(
+        db, actor, page=page, page_size=page_size, search=search
+    )
+
+
 async def ensure_can_view(db: AsyncSession, actor: User, req: OvertimeRequest) -> None:
-    if behavior_key(actor) == Role.LEADER.value:
+    if acts_as_team_leader(actor):
         er = await db.execute(select(Employee).where(Employee.id == req.employee_id))
         emp = er.scalar_one_or_none()
-        if not emp or emp.area_id != actor.area_id:
+        if not emp:
             raise forbidden("No puede acceder a esta solicitud")
+        ensure_employee_access(actor, emp)
 
 
 async def get_request(db: AsyncSession, request_id: int) -> OvertimeRequest | None:
@@ -82,8 +101,8 @@ async def list_requests(
     q = select(OvertimeRequest)
     count_q = select(func.count()).select_from(OvertimeRequest)
 
-    if behavior_key(actor) == Role.LEADER.value:
-        sub = select(Employee.id).where(Employee.area_id == actor.area_id)
+    if acts_as_team_leader(actor):
+        sub = select(Employee.id).where(Employee.leader_id == actor.id)
         q = q.where(OvertimeRequest.employee_id.in_(sub))
         count_q = count_q.where(OvertimeRequest.employee_id.in_(sub))
 
@@ -125,8 +144,8 @@ async def create_request(db: AsyncSession, actor: User, data: OvertimeRequestCre
     emp = er.scalar_one_or_none()
     if not emp:
         raise bad_request("Empleado no encontrado")
-    if behavior_key(actor) == Role.LEADER.value and emp.area_id != actor.area_id:
-        raise forbidden("El empleado debe pertenecer a su área")
+    if acts_as_team_leader(actor):
+        ensure_employee_access(actor, emp)
 
     req = OvertimeRequest(
         employee_id=data.employee_id,
@@ -173,13 +192,14 @@ async def update_request(
     if req.status != EntityStatus.PENDING.value:
         raise bad_request("Solo se pueden editar solicitudes pendientes")
 
-    if behavior_key(actor) == Role.LEADER.value:
+    if acts_as_team_leader(actor):
         if req.requested_by != actor.id:
             raise forbidden("No puede editar esta solicitud")
         er = await db.execute(select(Employee).where(Employee.id == req.employee_id))
         emp = er.scalar_one_or_none()
-        if not emp or emp.area_id != actor.area_id:
+        if not emp:
             raise forbidden("Solicitud no válida")
+        ensure_employee_access(actor, emp)
     elif behavior_key(actor) in (Role.ADMIN.value, Role.HR.value, Role.MANAGEMENT.value):
         pass
     else:

@@ -1,7 +1,7 @@
 """Permiso organigrama (solo admin, RRHH y gerencia)
 
-Revision ID: 013
-Revises: 012
+Revision ID: 014
+Revises: 013
 Create Date: 2026-05-13
 
 """
@@ -11,8 +11,8 @@ from typing import Sequence, Union
 from alembic import op
 from sqlalchemy import text
 
-revision: str = "013"
-down_revision: Union[str, None] = "012"
+revision: str = "014"
+down_revision: Union[str, None] = "013"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

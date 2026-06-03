@@ -8,7 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import client_ip, get_current_user, require_any_permission
 from app.db.session import get_db
 from app.models.user import User
+from app.api.v1.employees import _employee_read
 from app.schemas.common import PaginatedResponse
+from app.schemas.employee import EmployeeRead
 from app.schemas.overtime import (
     OvertimeApproveReject,
     OvertimeHistoryRead,
@@ -104,6 +106,37 @@ async def list_overtime(
     pages = math.ceil(total / page_size) if page_size else None
     return PaginatedResponse(
         items=[_to_read(r) for r in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+        pages=pages,
+    )
+
+
+@router.get("/assignable-employees", response_model=PaginatedResponse[EmployeeRead])
+async def list_assignable_employees(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current: Annotated[User, Depends(require_any_permission("overtime.create"))],
+    page: int = Query(1, ge=1),
+    page_size: int = Query(200, ge=1, le=500),
+    search: str | None = Query(None, description="Buscar por nombre o número de identificación"),
+) -> PaginatedResponse[EmployeeRead]:
+    """Empleados del equipo del líder (sin filtro por área) para el formulario de horas extra."""
+    items, total = await svc.list_assignable_employees(
+        db, current, page=page, page_size=page_size, search=search
+    )
+    await audit_service.write_audit(
+        db,
+        user_id=current.id,
+        action="overtime.assignable_employees",
+        entity_type="employee",
+        ip_address=client_ip(request),
+    )
+    await db.commit()
+    pages = math.ceil(total / page_size) if page_size else None
+    return PaginatedResponse(
+        items=[_employee_read(e) for e in items],
         total=total,
         page=page,
         page_size=page_size,

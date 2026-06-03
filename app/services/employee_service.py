@@ -20,6 +20,26 @@ from app.services.incapacity_catalog_service import require_active_temporal_cate
 from app.services.rbac_service import behavior_key
 
 
+def acts_as_team_leader(user: User) -> bool:
+    """Usuario que opera con alcance de equipo (perfil o rol de líder)."""
+    if behavior_key(user) == Role.LEADER.value:
+        return True
+    return user.role == Role.LEADER.value
+
+
+def _scoped_to_led_team(
+    actor: User,
+    *,
+    team_only: bool,
+    leader_id: int | None,
+) -> bool:
+    if team_only:
+        return True
+    if acts_as_team_leader(actor):
+        return True
+    return leader_id is not None and leader_id == actor.id
+
+
 async def validate_leader(
     db: AsyncSession,
     leader_id: int | None,
@@ -64,6 +84,7 @@ async def list_employees_for_actor(
     area_id: int | None = None,
     leader_id: int | None = None,
     search: str | None = None,
+    team_only: bool = False,
 ) -> tuple[list[Employee], int]:
     q = select(Employee).options(
         selectinload(Employee.area),
@@ -78,7 +99,7 @@ async def list_employees_for_actor(
         q = q.where(cond)
         count_q = count_q.where(cond)
 
-    if behavior_key(actor) == Role.LEADER.value:
+    if _scoped_to_led_team(actor, team_only=team_only, leader_id=leader_id):
         q = q.where(Employee.leader_id == actor.id)
         count_q = count_q.where(Employee.leader_id == actor.id)
     else:
@@ -93,6 +114,25 @@ async def list_employees_for_actor(
     q = q.order_by(Employee.id).offset((page - 1) * page_size).limit(page_size)
     rows = (await db.execute(q)).scalars().all()
     return list(rows), total
+
+
+async def list_assignable_employees_for_actor(
+    db: AsyncSession,
+    actor: User,
+    *,
+    page: int,
+    page_size: int,
+    search: str | None = None,
+) -> tuple[list[Employee], int]:
+    """Empleados para formularios (horas extra, incapacidades): equipo del líder sin filtro por área."""
+    bk = behavior_key(actor)
+    if bk in (Role.ADMIN.value, Role.HR.value, Role.MANAGEMENT.value):
+        return await list_employees_for_actor(
+            db, actor, page=page, page_size=page_size, search=search
+        )
+    return await list_employees_for_actor(
+        db, actor, page=page, page_size=page_size, search=search, team_only=True
+    )
 
 
 async def create_employee(db: AsyncSession, data: EmployeeCreate, *, actor: User) -> Employee:
@@ -168,7 +208,7 @@ async def delete_employee(db: AsyncSession, employee_id: int) -> None:
 
 
 def ensure_employee_access(actor: User, emp: Employee) -> None:
-    if behavior_key(actor) == Role.LEADER.value and emp.leader_id != actor.id:
+    if acts_as_team_leader(actor) and emp.leader_id != actor.id:
         raise forbidden("Solo puede ver empleados asignados a usted como líder")
 
 

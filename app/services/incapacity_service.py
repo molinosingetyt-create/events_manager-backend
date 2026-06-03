@@ -12,6 +12,11 @@ from app.models.incapacity import IncapacityComment, IncapacityExtension, Incapa
 from app.models.profile import Profile
 from app.models.user import User
 from app.schemas.incapacity import IncapacityCommentCreate, IncapacityNoteCreate, IncapacityNoteUpdate
+from app.services.employee_service import (
+    acts_as_team_leader,
+    ensure_employee_access,
+    list_assignable_employees_for_actor,
+)
 from app.services.incapacity_catalog_service import (
     validate_note_catalog_refs,
 )
@@ -132,14 +137,30 @@ async def _add_history(
 
 
 async def list_leader_filter_options(db: AsyncSession) -> list[tuple[int, str]]:
-    """Usuarios activos con comportamiento de líder (perfil), alineado con validate_leader."""
+    """Usuarios activos con comportamiento o rol de líder."""
     r = await db.execute(
         select(User.id, User.name)
         .join(Profile, User.profile_id == Profile.id)
-        .where(Profile.behavior_key == Role.LEADER.value, User.status == EntityStatus.ACTIVE.value)
+        .where(
+            User.status == EntityStatus.ACTIVE.value,
+            or_(Profile.behavior_key == Role.LEADER.value, User.role == Role.LEADER.value),
+        )
         .order_by(User.name.asc(), User.id.asc())
     )
     return [(row[0], row[1]) for row in r.all()]
+
+
+async def list_assignable_employees(
+    db: AsyncSession,
+    actor: User,
+    *,
+    page: int,
+    page_size: int,
+    search: str | None = None,
+) -> tuple[list[Employee], int]:
+    return await list_assignable_employees_for_actor(
+        db, actor, page=page, page_size=page_size, search=search
+    )
 
 
 async def get_note(db: AsyncSession, note_id: int) -> IncapacityNote | None:
@@ -165,7 +186,11 @@ async def list_notes(
     q = select(IncapacityNote)
     count_q = select(func.count()).select_from(IncapacityNote)
 
-    emp_join_needed = bool(search and search.strip()) or leader_id is not None
+    emp_join_needed = (
+        bool(search and search.strip())
+        or leader_id is not None
+        or acts_as_team_leader(actor)
+    )
     if emp_join_needed:
         q = q.join(Employee, IncapacityNote.employee_id == Employee.id)
         count_q = count_q.join(Employee, IncapacityNote.employee_id == Employee.id)
@@ -176,14 +201,12 @@ async def list_notes(
         q = q.where(emp_cond)
         count_q = count_q.where(emp_cond)
 
-    if leader_id is not None:
+    if acts_as_team_leader(actor):
+        q = q.where(Employee.leader_id == actor.id)
+        count_q = count_q.where(Employee.leader_id == actor.id)
+    elif leader_id is not None:
         q = q.where(Employee.leader_id == leader_id)
         count_q = count_q.where(Employee.leader_id == leader_id)
-
-    if behavior_key(actor) == Role.LEADER.value:
-        sub = select(Employee.id).where(Employee.area_id == actor.area_id)
-        q = q.where(IncapacityNote.employee_id.in_(sub))
-        count_q = count_q.where(IncapacityNote.employee_id.in_(sub))
 
     if employee_id is not None:
         q = q.where(IncapacityNote.employee_id == employee_id)
@@ -208,8 +231,8 @@ async def ensure_employee_scope(db: AsyncSession, actor: User, employee_id: int)
     emp = er.scalar_one_or_none()
     if not emp:
         raise bad_request("Empleado no encontrado")
-    if behavior_key(actor) == Role.LEADER.value and emp.area_id != actor.area_id:
-        raise forbidden("El empleado no está en su área")
+    if acts_as_team_leader(actor):
+        ensure_employee_access(actor, emp)
     return emp
 
 
@@ -221,7 +244,7 @@ async def create_note(
     *,
     long_absence_second_file_url: str | None = None,
 ) -> IncapacityNote:
-    if behavior_key(actor) == Role.LEADER.value:
+    if acts_as_team_leader(actor):
         await ensure_employee_scope(db, actor, data.employee_id)
     elif behavior_key(actor) in (Role.ADMIN.value, Role.HR.value, Role.MANAGEMENT.value):
         er = await db.execute(select(Employee).where(Employee.id == data.employee_id))
@@ -413,16 +436,16 @@ async def ensure_employee_scope_for_read(
     emp = er.scalar_one_or_none()
     if not emp:
         raise not_found("Empleado no encontrado")
-    if behavior_key(actor) == Role.LEADER.value and emp.area_id != actor.area_id:
-        raise forbidden("No puede acceder a este registro")
+    if acts_as_team_leader(actor):
+        ensure_employee_access(actor, emp)
     return emp
 
 
 def can_modify_note(actor: User, note: IncapacityNote, emp: Employee) -> bool:
     if behavior_key(actor) in (Role.ADMIN.value, Role.HR.value):
         return True
-    if behavior_key(actor) == Role.LEADER.value:
-        return emp.area_id == actor.area_id and note.created_by == actor.id
+    if acts_as_team_leader(actor):
+        return emp.leader_id == actor.id and note.created_by == actor.id
     if behavior_key(actor) == Role.MANAGEMENT.value:
         return True
     return False
