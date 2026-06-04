@@ -57,15 +57,18 @@ class OrgChartMemberRead(BaseModel):
 
 
 class OrgChartNodeRead(BaseModel):
-    """Nodo recursivo del organigrama (grupo, usuario o empleado)."""
+    """Nodo recursivo del organigrama (grupo, usuario, empleado o manual)."""
 
-    kind: Literal["group", "user", "employee"]
+    kind: Literal["group", "user", "employee", "manual", "leader_shelf"]
     user_id: int | None = None
     employee_id: int | None = None
+    layout_node_id: int | None = None
+    display_key: str | None = None
     name: str
     position_label: str
     area_name: str = ""
     children: list["OrgChartNodeRead"] = Field(default_factory=list)
+    leaders: list["OrgChartNodeRead"] = Field(default_factory=list)
 
 
 OrgChartNodeRead.model_rebuild()
