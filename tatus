@@ -1,0 +1,16 @@
+[33mcommit 1a10e8e1b6059d78a37b0c077748d2ee099ea7aa[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmaster[m[33m, [m[1;31morigin/master[m[33m, [m[1;31morigin/HEAD[m[33m)[m
+Author: Ingeniero TYT <molinosingetyt@gmail.com>
+Date:   Thu Jun 4 10:26:07 2026 -0500
+
+    cambios del backend
+
+ alembic/versions/015_manual_org_chart.py             | 124 [32m+++++++++++[m
+ alembic/versions/016_org_chart_multi_parent_edges.py | 139 [32m++++++++++++[m
+ app/api/v1/org_chart.py                              | 184 [32m++++++++++++++++[m
+ app/api/v1/router.py                                 |   2 [32m+[m
+ app/models/__init__.py                               |   3 [32m+[m
+ app/models/org_chart_layout.py                       |  72 [32m+++++++[m
+ app/schemas/employee.py                              |   7 [32m+[m[31m-[m
+ app/schemas/org_chart_layout.py                      |  59 [32m++++++[m
+ app/services/org_chart_layout_service.py             | 456 [32m++++++++++++++++++++++++++++++++++++++++[m
+ 9 files changed, 1044 insertions(+), 2 deletions(-)
