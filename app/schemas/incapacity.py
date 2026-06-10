@@ -10,7 +10,7 @@ from app.schemas.overtime import UserBriefRead
 class IncapacityExtensionCreate(BaseModel):
     start_date: date
     end_date: date
-    note: str = Field(min_length=1, max_length=65535)
+    note: Optional[str] = Field(default=None, max_length=65535)
 
 
 class IncapacityExtensionRead(BaseModel):
@@ -18,8 +18,8 @@ class IncapacityExtensionRead(BaseModel):
     incapacity_id: int
     start_date: date
     end_date: date
-    file_url: str
-    note: str
+    file_url: Optional[str] = None
+    note: Optional[str] = None
     created_by: int
     creator: Optional[UserBriefRead] = None
     created_at: datetime
@@ -54,7 +54,7 @@ class IncapacityNoteCreate(BaseModel):
     temporal_category_id: int
     eps_arl_id: int | None = None
     diagnosis_id: int | None = None
-    description: str = Field(min_length=1)
+    description: Optional[str] = Field(default=None, max_length=65535)
     support: Optional[str] = Field(default=None, max_length=65535)
     start_date: date
     end_date: Optional[date] = None
@@ -95,7 +95,7 @@ class IncapacityNoteRead(BaseModel):
     diagnosis_id: int | None = None
     diagnosis_code: str = ""
     diagnosis_name: str = ""
-    description: str
+    description: Optional[str] = None
     support: Optional[str] = None
     start_date: date
     end_date: Optional[date]

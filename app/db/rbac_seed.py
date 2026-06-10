@@ -118,6 +118,7 @@ def seed_rbac_sync(conn: Connection) -> None:
         "incapacity.view",
         "incapacity.create",
         "incapacity.edit",
+        "incapacity.approve",
         "absenteeism.view",
         "absenteeism.create",
         "absenteeism.edit",

@@ -242,6 +242,10 @@ async def list_notes(
     leader_id: int | None = Query(None, description="Filtrar por líder asignado al empleado (id de usuario)"),
     date_from: date | None = None,
     date_to: date | None = None,
+    has_extension: bool | None = Query(
+        None,
+        description="true = solo con prórroga; false = solo inicial (sin prórroga)",
+    ),
 ) -> PaginatedResponse[IncapacityNoteRead]:
     items, total = await svc.list_notes(
         db,
@@ -254,6 +258,7 @@ async def list_notes(
         leader_id=leader_id,
         date_from=date_from,
         date_to=date_to,
+        has_extension=has_extension,
     )
     await audit_service.write_audit(
         db,
@@ -297,19 +302,17 @@ async def create_note(
     if days >= 3 and kind_val == LongAbsenceDocumentKind.HISTORIA_CLINICA.value:
         if _is_nonempty_upload(file_eps):
             raise bad_request("Use el archivo «historia clínica» para la imagen adicional, no el campo de EPS.")
-        if not _is_nonempty_upload(file_historia_clinica):
-            raise bad_request("Adjunte la imagen adicional de historia clínica.")
-        assert file_historia_clinica is not None
-        _validate_image_upload(file_historia_clinica)
-        second_url = await _save_upload(file_historia_clinica)
+        if _is_nonempty_upload(file_historia_clinica):
+            assert file_historia_clinica is not None
+            _validate_image_upload(file_historia_clinica)
+            second_url = await _save_upload(file_historia_clinica)
     elif days >= 3 and kind_val == LongAbsenceDocumentKind.INCAPACIDAD_EPS.value:
         if _is_nonempty_upload(file_historia_clinica):
             raise bad_request("Use el archivo «EPS» para la foto de la incapacidad transcrita, no el de historia clínica.")
-        if not _is_nonempty_upload(file_eps):
-            raise bad_request("Adjunte la foto obligatoria de la incapacidad transcrita por EPS.")
-        assert file_eps is not None
-        _validate_image_upload(file_eps)
-        second_url = await _save_upload(file_eps)
+        if _is_nonempty_upload(file_eps):
+            assert file_eps is not None
+            _validate_image_upload(file_eps)
+            second_url = await _save_upload(file_eps)
     elif _is_nonempty_upload(file_historia_clinica) or _is_nonempty_upload(file_eps):
         raise bad_request("No adjunte soporte adicional si la incapacidad es de menos de 3 días.")
 
@@ -365,14 +368,17 @@ async def add_incapacity_extension(
     note_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
     current: Annotated[User, Depends(require_any_permission("incapacity.extension"))],
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(None),
     payload: str = Form(..., description="JSON: IncapacityExtensionCreate"),
 ) -> IncapacityNoteRead:
     body = IncapacityExtensionCreate.model_validate_json(payload)
     if body.end_date < body.start_date:
         raise bad_request("La fecha fin no puede ser anterior a la fecha de inicio.")
-    _validate_image_upload(file)
-    url = await _save_upload(file)
+    url: str | None = None
+    if _is_nonempty_upload(file):
+        assert file is not None
+        _validate_image_upload(file)
+        url = await _save_upload(file)
     await svc.create_extension(
         db,
         current,
@@ -459,7 +465,10 @@ async def update_note(
     note_id: int,
     body: IncapacityNoteUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current: Annotated[User, Depends(require_any_permission("incapacity.edit"))],
+    current: Annotated[
+        User,
+        Depends(require_any_permission("incapacity.edit", "incapacity.approve")),
+    ],
 ) -> IncapacityNoteRead:
     n = await svc.update_note(db, current, note_id, body, file_url=None)
     await audit_service.write_audit(

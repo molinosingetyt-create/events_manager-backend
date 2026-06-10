@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 class IncapacityExtension(Base, TimestampMixin):
-    """Prórroga asociada a una incapacidad (fechas, imagen y nota obligatorios)."""
+    """Prórroga asociada a una incapacidad (fechas obligatorias; imagen y nota opcionales)."""
 
     __tablename__ = "incapacity_extensions"
 
@@ -24,8 +24,8 @@ class IncapacityExtension(Base, TimestampMixin):
     )
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
-    file_url: Mapped[str] = mapped_column(String(1024), nullable=False)
-    note: Mapped[str] = mapped_column(Text, nullable=False)
+    file_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
 
     incapacity_note: Mapped["IncapacityNote"] = relationship(
@@ -40,7 +40,7 @@ class IncapacityNote(Base, TimestampMixin, StatusMixin):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"))
     type: Mapped[str] = mapped_column(String(32), nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     support: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)

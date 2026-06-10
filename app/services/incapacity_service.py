@@ -20,7 +20,7 @@ from app.services.employee_service import (
 from app.services.incapacity_catalog_service import (
     validate_note_catalog_refs,
 )
-from app.services.rbac_service import behavior_key
+from app.services.rbac_service import behavior_key, user_has_any_permission
 
 _INC_BASE = (
     selectinload(IncapacityNote.employee),
@@ -74,26 +74,20 @@ def validate_long_absence_supports(
     second_file_url: str | None,
     eps_transcribed_text: str | None,
 ) -> None:
-    """Historia clínica y EPS (3+ días): siempre imagen obligatoria; no se admite texto transcrito."""
+    """Historia clínica y EPS (3+ días): imagen opcional; no se admite texto transcrito."""
     txt = (eps_transcribed_text or "").strip()
     if days < 3:
         if second_file_url or txt:
             raise bad_request("El soporte adicional solo aplica para incapacidades de 3 o más días.")
         return
-    if kind == LongAbsenceDocumentKind.HISTORIA_CLINICA.value:
-        if txt:
-            raise bad_request(
-                "No utilice texto transcrito; adjunte obligatoriamente la imagen de historia clínica."
-            )
-        if not second_file_url:
-            raise bad_request("Debe adjuntar la imagen adicional de historia clínica.")
-    elif kind == LongAbsenceDocumentKind.INCAPACIDAD_EPS.value:
-        if txt:
-            raise bad_request(
-                "No utilice texto transcrito; adjunte obligatoriamente la foto del documento de incapacidad EPS."
-            )
-        if not second_file_url:
-            raise bad_request("Debe adjuntar la foto de la incapacidad transcrita por EPS.")
+    if kind == LongAbsenceDocumentKind.HISTORIA_CLINICA.value and txt:
+        raise bad_request(
+            "No utilice texto transcrito; adjunte la imagen de historia clínica si corresponde."
+        )
+    if kind == LongAbsenceDocumentKind.INCAPACIDAD_EPS.value and txt:
+        raise bad_request(
+            "No utilice texto transcrito; adjunte la foto del documento de incapacidad EPS si corresponde."
+        )
 
 
 def _snapshot(note: IncapacityNote) -> str:
@@ -184,6 +178,7 @@ async def list_notes(
     leader_id: int | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    has_extension: bool | None = None,
 ) -> tuple[list[IncapacityNote], int]:
     q = select(IncapacityNote)
     count_q = select(func.count()).select_from(IncapacityNote)
@@ -223,6 +218,19 @@ async def list_notes(
     if date_to is not None:
         q = q.where(IncapacityNote.start_date <= date_to)
         count_q = count_q.where(IncapacityNote.start_date <= date_to)
+
+    if has_extension is not None:
+        ext_exists = (
+            select(IncapacityExtension.id)
+            .where(IncapacityExtension.incapacity_id == IncapacityNote.id)
+            .exists()
+        )
+        if has_extension:
+            q = q.where(ext_exists)
+            count_q = count_q.where(ext_exists)
+        else:
+            q = q.where(~ext_exists)
+            count_q = count_q.where(~ext_exists)
 
     total = (await db.execute(count_q)).scalar_one()
     q = (
@@ -277,8 +285,6 @@ async def create_note(
     )
 
     days = inclusive_incapacity_days(data.start_date, data.end_date)
-    if not file_url or not str(file_url).strip():
-        raise bad_request("Debe adjuntar la imagen de soporte de la incapacidad.")
     validate_long_absence_supports(
         days=days,
         kind=kind_val,
@@ -286,8 +292,8 @@ async def create_note(
         eps_transcribed_text=None,
     )
 
-    # Solo gerencia o administración pueden dejar registros ya aprobados/rechazados; el resto queda pendiente.
-    if behavior_key(actor) in (Role.MANAGEMENT.value, Role.ADMIN.value):
+    # Quien tenga incapacity.approve puede dejar el estado indicado; el resto queda pendiente.
+    if await user_has_any_permission(db, actor, "incapacity.approve"):
         status_val = data.status.value
     else:
         status_val = EntityStatus.PENDING.value
@@ -298,7 +304,7 @@ async def create_note(
         temporal_category_id=data.temporal_category_id,
         eps_arl_id=data.eps_arl_id,
         diagnosis_id=data.diagnosis_id,
-        description=data.description,
+        description=(data.description.strip() if data.description and data.description.strip() else None),
         support=(data.support.strip() if data.support and data.support.strip() else None),
         start_date=data.start_date,
         end_date=data.end_date,
@@ -344,7 +350,7 @@ async def update_note(
     if data.type is not None:
         note.type = data.type.value
     if data.description is not None:
-        note.description = data.description
+        note.description = data.description.strip() or None
     if data.support is not None:
         note.support = data.support.strip() or None
     if data.start_date is not None:
@@ -386,8 +392,8 @@ async def update_note(
     if data.status is not None:
         new_s = data.status.value
         if new_s in (EntityStatus.APPROVED.value, EntityStatus.REJECTED.value):
-            if behavior_key(actor) not in (Role.MANAGEMENT.value, Role.ADMIN.value):
-                raise forbidden("Solo gerencia o administración pueden aprobar o rechazar")
+            if not await user_has_any_permission(db, actor, "incapacity.approve"):
+                raise forbidden("No tiene permiso para aprobar o rechazar incapacidades")
             if note.status != EntityStatus.PENDING.value:
                 raise bad_request("Solo se pueden aprobar o rechazar registros pendientes")
         note.status = new_s
@@ -476,8 +482,8 @@ async def create_extension(
     *,
     start_date: date,
     end_date: date,
-    file_url: str,
-    note_text: str,
+    file_url: str | None,
+    note_text: str | None,
 ) -> IncapacityExtension:
     note = await get_note(db, note_id)
     if not note:
@@ -495,12 +501,13 @@ async def create_extension(
             "La fecha fin de la prórroga debe ser igual o posterior a la fecha fin de la incapacidad."
         )
 
+    note_clean = (note_text or "").strip() or None
     ext = IncapacityExtension(
         incapacity_id=note_id,
         start_date=start_date,
         end_date=end_date,
         file_url=file_url,
-        note=note_text.strip(),
+        note=note_clean,
         created_by=actor.id,
     )
     db.add(ext)
@@ -510,7 +517,7 @@ async def create_extension(
             "extension_id": ext.id,
             "start_date": str(start_date),
             "end_date": str(end_date),
-            "note": note_text.strip(),
+            "note": note_clean,
             "file_url": file_url,
         },
         ensure_ascii=False,
