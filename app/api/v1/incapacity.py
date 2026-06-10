@@ -1,5 +1,6 @@
 import math
 import uuid
+from datetime import date
 from pathlib import Path
 from typing import Annotated
 
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import client_ip, get_current_user, require_any_permission
 from app.core.exceptions import bad_request
 from app.core.config import get_settings
+from app.core.quincena import format_causation_quincena
 from app.db.session import get_db
 from app.models.enums import LongAbsenceDocumentKind
 from app.models.user import User
@@ -106,6 +108,12 @@ def _to_read(note) -> IncapacityNoteRead:
         support=note.support,
         start_date=note.start_date,
         end_date=note.end_date,
+        causation_year=note.causation_year,
+        causation_month=note.causation_month,
+        causation_half=note.causation_half,
+        causation_quincena_label=format_causation_quincena(
+            note.causation_year, note.causation_month, note.causation_half
+        ),
         long_absence_document_kind=note.long_absence_document_kind,
         file_url=note.file_url,
         long_absence_second_file_url=note.long_absence_second_file_url,
@@ -232,6 +240,8 @@ async def list_notes(
     type: str | None = Query(None, alias="type_filter"),
     search: str | None = Query(None, description="Buscar por nombre o identificación del empleado"),
     leader_id: int | None = Query(None, description="Filtrar por líder asignado al empleado (id de usuario)"),
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> PaginatedResponse[IncapacityNoteRead]:
     items, total = await svc.list_notes(
         db,
@@ -242,6 +252,8 @@ async def list_notes(
         type_filter=type,
         search=search,
         leader_id=leader_id,
+        date_from=date_from,
+        date_to=date_to,
     )
     await audit_service.write_audit(
         db,

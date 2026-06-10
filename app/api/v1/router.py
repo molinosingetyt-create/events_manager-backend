@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    absenteeism,
     areas,
     auth,
     diagnoses,
@@ -12,6 +13,7 @@ from app.api.v1 import (
     overtime,
     rbac_admin,
     realtime_ws,
+    shifts,
     temporal_categories,
     users,
 )
@@ -27,6 +29,8 @@ api_router.include_router(employees.router, prefix="/employees", tags=["employee
 api_router.include_router(org_chart.router, prefix="/org-chart", tags=["org-chart"])
 api_router.include_router(overtime.router, prefix="/overtime-requests", tags=["overtime"])
 api_router.include_router(incapacity.router, prefix="/incapacity-notes", tags=["incapacity"])
+api_router.include_router(absenteeism.router, prefix="/absenteeism-records", tags=["absenteeism"])
+api_router.include_router(shifts.router, prefix="/shift-schedules", tags=["shifts"])
 api_router.include_router(
     temporal_categories.router, prefix="/temporal-categories", tags=["incapacity-catalog"]
 )

@@ -1,8 +1,8 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text, Time, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -21,6 +21,9 @@ class OvertimeRequest(Base, TimestampMixin, StatusMixin):
     requested_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     date: Mapped[date] = mapped_column(Date, nullable=False)
     hours: Mapped[Decimal] = mapped_column(Numeric(6, 2), nullable=False)
+    start_time: Mapped[Optional[time]] = mapped_column(Time, nullable=True)
+    end_time: Mapped[Optional[time]] = mapped_column(Time, nullable=True)
+    timezone: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     justification: Mapped[str] = mapped_column(Text, nullable=False)
 
     approved_by: Mapped[Optional[int]] = mapped_column(

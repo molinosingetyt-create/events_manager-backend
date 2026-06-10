@@ -19,6 +19,14 @@ class EntityStatus(str, enum.Enum):
 class IncapacityType(str, enum.Enum):
     GENERAL_ILLNESS = "general_illness"
     WORK_ACCIDENT = "work_accident"
+    MATERNITY_LEAVE = "maternity_leave"
+    PATERNITY_LEAVE = "paternity_leave"
+    BEREAVEMENT_LEAVE = "bereavement_leave"
+
+
+class AbsenteeismClassification(str, enum.Enum):
+    PAID = "paid"
+    UNPAID = "unpaid"
 
 
 class LongAbsenceDocumentKind(str, enum.Enum):

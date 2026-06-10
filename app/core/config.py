@@ -47,6 +47,18 @@ class Settings(BaseSettings):
 
     upload_dir: str = "uploads"
     max_upload_mb: int = 10
+    max_profile_photo_mb: int = 5
+
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    aws_region: str = Field(default="us-east-1", validation_alias="AWS_REGION")
+    s3_bucket: str = Field(default="", validation_alias="S3_BUCKET")
+    s3_public_base_url: str = Field(default="", validation_alias="S3_PUBLIC_BASE_URL")
+    s3_profile_photos_prefix: str = Field(
+        default="employees/profile-photos",
+        validation_alias="S3_PROFILE_PHOTOS_PREFIX",
+    )
+    s3_acl_public: bool = Field(default=True, validation_alias="S3_ACL_PUBLIC")
 
 
 @lru_cache

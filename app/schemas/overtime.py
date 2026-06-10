@@ -1,9 +1,9 @@
 from datetime import date as DateType
-from datetime import datetime
+from datetime import datetime, time
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class UserBriefRead(BaseModel):
@@ -16,14 +16,23 @@ class UserBriefRead(BaseModel):
 
 class OvertimeRequestCreate(BaseModel):
     employee_id: int
-    date: DateType
-    hours: Decimal = Field(gt=0, max_digits=8, decimal_places=2)
     justification: str = Field(min_length=1)
+    dates: list[DateType] = Field(min_length=1, max_length=31)
+    start_time: time
+    end_time: time
+
+    @field_validator("dates")
+    @classmethod
+    def unique_dates(cls, v: list[DateType]) -> list[DateType]:
+        if len(set(v)) != len(v):
+            raise ValueError("No repita la misma fecha")
+        return v
 
 
 class OvertimeRequestUpdate(BaseModel):
     date: Optional[DateType] = None
-    hours: Optional[Decimal] = Field(default=None, gt=0, max_digits=8, decimal_places=2)
+    start_time: Optional[time] = None
+    end_time: Optional[time] = None
     justification: str | None = Field(default=None, min_length=1)
 
 
@@ -53,6 +62,9 @@ class OvertimeRequestRead(BaseModel):
     requester: UserBriefRead
     date: DateType
     hours: Decimal
+    start_time: Optional[time] = None
+    end_time: Optional[time] = None
+    time_range_label: Optional[str] = None
     justification: str
     status: str
     approved_by: Optional[int]
@@ -63,3 +75,9 @@ class OvertimeRequestRead(BaseModel):
     history: list[OvertimeHistoryRead] = []
 
     model_config = {"from_attributes": True}
+
+
+class OvertimeBatchCreateRead(BaseModel):
+    items: list[OvertimeRequestRead]
+    hours_per_day: Decimal
+    total_hours: Decimal

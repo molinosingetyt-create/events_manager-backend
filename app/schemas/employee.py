@@ -47,6 +47,17 @@ class EmployeeRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class EmployeeProfileAccessRead(BaseModel):
+    """Metadatos de acceso al expediente (fase 0); `expediente_available` en fase 1+."""
+
+    employee_id: int
+    view_level: Literal["basic", "full"]
+    can_edit_profile: bool = False
+    can_export: bool = False
+    can_see_alerts: bool = False
+    expediente_available: bool = True
+
+
 class OrgChartMemberRead(BaseModel):
     """Colaborador bajo un líder (empleado)."""
 

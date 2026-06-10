@@ -11,6 +11,12 @@ PERMISSIONS = [
     ("employees.create", "Crear empleados"),
     ("employees.edit", "Editar empleados"),
     ("employees.delete", "Eliminar empleados"),
+    ("employees.profile.full", "Ver expediente HR completo"),
+    ("employees.profile.edit", "Editar expediente HR"),
+    ("employees.profile.export", "Exportar expediente HR (PDF / Excel)"),
+    ("employees.profile.alerts", "Alertas de expediente HR"),
+    ("employees.profile.custom_fields.manage", "Configurar campos personalizados del expediente"),
+    ("employees.profile.payroll", "Gestionar novedades de nómina en expediente"),
     ("areas.view", "Ver áreas"),
     ("areas.create", "Crear áreas"),
     ("areas.edit", "Editar áreas"),
@@ -25,6 +31,14 @@ PERMISSIONS = [
     ("incapacity.edit", "Editar incapacidades / notas"),
     ("incapacity.delete", "Eliminar incapacidades / notas"),
     ("incapacity.approve", "Aprobar / rechazar incapacidades"),
+    ("absenteeism.view", "Ver ausentismo"),
+    ("absenteeism.create", "Registrar ausentismo"),
+    ("absenteeism.edit", "Editar ausentismo"),
+    ("absenteeism.delete", "Eliminar ausentismo"),
+    ("shifts.view", "Ver programación de turnos"),
+    ("shifts.create", "Crear turnos programados"),
+    ("shifts.edit", "Editar turnos programados"),
+    ("shifts.delete", "Eliminar turnos programados"),
     ("catalog.settings", "Catálogos (temporal, EPS/ARL, diagnósticos)"),
     ("security.profiles", "Administrar perfiles"),
     ("security.permissions", "Administrar permisos"),
@@ -67,6 +81,12 @@ def seed_rbac_sync(conn: Connection) -> None:
 
     all_codes = [p[0] for p in PERMISSIONS]
     admin_codes = all_codes
+    for extra_admin in (
+        "employees.profile.custom_fields.manage",
+        "employees.profile.payroll",
+    ):
+        if extra_admin not in admin_codes:
+            admin_codes = list(admin_codes) + [extra_admin]
     hr_codes = [
         c
         for c in all_codes
@@ -79,9 +99,18 @@ def seed_rbac_sync(conn: Connection) -> None:
             "security.permissions",
         )
     ]
+    for extra in (
+        "employees.profile.custom_fields.manage",
+        "employees.profile.payroll",
+    ):
+        if extra not in hr_codes and extra in all_codes:
+            hr_codes.append(extra)
     mgmt_codes = [
         "users.view",
         "employees.view",
+        "employees.profile.full",
+        "employees.profile.export",
+        "employees.profile.alerts",
         "overtime.view",
         "overtime.create",
         "overtime.edit",
@@ -89,6 +118,12 @@ def seed_rbac_sync(conn: Connection) -> None:
         "incapacity.view",
         "incapacity.create",
         "incapacity.edit",
+        "absenteeism.view",
+        "absenteeism.create",
+        "absenteeism.edit",
+        "shifts.view",
+        "shifts.create",
+        "shifts.edit",
     ]
     leader_codes = [
         "employees.view",
@@ -98,6 +133,12 @@ def seed_rbac_sync(conn: Connection) -> None:
         "incapacity.view",
         "incapacity.create",
         "incapacity.edit",
+        "absenteeism.view",
+        "absenteeism.create",
+        "absenteeism.edit",
+        "shifts.view",
+        "shifts.create",
+        "shifts.edit",
     ]
 
     for profile_code, codes in [

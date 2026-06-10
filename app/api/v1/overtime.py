@@ -11,8 +11,10 @@ from app.models.user import User
 from app.api.v1.employees import _employee_read
 from app.schemas.common import PaginatedResponse
 from app.schemas.employee import EmployeeRead
+from app.core.overtime_time import format_time_range_label
 from app.schemas.overtime import (
     OvertimeApproveReject,
+    OvertimeBatchCreateRead,
     OvertimeHistoryRead,
     OvertimeRequestCreate,
     OvertimeRequestRead,
@@ -62,6 +64,9 @@ def _to_read(req) -> OvertimeRequestRead:
         requester=requester_read,
         date=req.date,
         hours=req.hours,
+        start_time=req.start_time,
+        end_time=req.end_time,
+        time_range_label=format_time_range_label(req.start_time, req.end_time),
         justification=req.justification,
         status=req.status,
         approved_by=req.approved_by,
@@ -144,7 +149,7 @@ async def list_assignable_employees(
     )
 
 
-@router.post("", response_model=OvertimeRequestRead)
+@router.post("", response_model=OvertimeBatchCreateRead)
 async def create_overtime(
     request: Request,
     body: OvertimeRequestCreate,
@@ -152,19 +157,25 @@ async def create_overtime(
     current: Annotated[
         User, Depends(require_any_permission("overtime.create"))
     ],
-) -> OvertimeRequestRead:
-    r = await svc.create_request(db, current, body)
+) -> OvertimeBatchCreateRead:
+    items, hours_per_day, total_hours = await svc.create_requests(db, current, body)
+    first_id = items[0].id if items else None
     await audit_service.write_audit(
         db,
         user_id=current.id,
         action="overtime.create",
         entity_type="overtime_request",
-        entity_id=r.id,
+        entity_id=first_id,
+        details={"count": len(items), "total_hours": str(total_hours)},
         ip_address=client_ip(request),
     )
     await db.commit()
     await broadcast_data_changed(["overtime", "notifications"])
-    return _to_read(r)
+    return OvertimeBatchCreateRead(
+        items=[_to_read(r) for r in items],
+        hours_per_day=hours_per_day,
+        total_hours=total_hours,
+    )
 
 
 @router.get("/{request_id}", response_model=OvertimeRequestRead)

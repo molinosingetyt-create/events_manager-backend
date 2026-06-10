@@ -58,6 +58,9 @@ class IncapacityNote(Base, TimestampMixin, StatusMixin):
     long_absence_document_kind: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     long_absence_second_file_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     long_absence_eps_transcribed_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    causation_year: Mapped[Optional[int]] = mapped_column(nullable=True)
+    causation_month: Mapped[Optional[int]] = mapped_column(nullable=True)
+    causation_half: Mapped[Optional[int]] = mapped_column(nullable=True)
 
     employee: Mapped["Employee"] = relationship("Employee", back_populates="incapacity_notes")
     temporal_category: Mapped["TemporalCategory"] = relationship(

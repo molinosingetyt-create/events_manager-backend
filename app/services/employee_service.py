@@ -5,10 +5,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import bad_request, forbidden, not_found
+from app.models.area import Area
 from app.models.employee import Employee
+from app.models.employee_profile import EmployeeLabor
 from app.models.enums import EntityStatus, Role
 from app.models.profile import Profile
 from app.models.user import User
+from app.schemas.employee_profile import DOCUMENT_KIND_LABELS, EmployeeFilterOptionsRead
 from app.schemas.employee import (
     EmployeeCreate,
     EmployeeUpdate,
@@ -75,6 +78,58 @@ async def get_employee(db: AsyncSession, employee_id: int) -> Employee | None:
     return r.scalar_one_or_none()
 
 
+def _employee_list_base():
+    return select(Employee).outerjoin(
+        EmployeeLabor, EmployeeLabor.employee_id == Employee.id
+    )
+
+
+def _apply_employee_list_filters(
+    q,
+    count_q,
+    *,
+    search: str | None,
+    status: str | None,
+    area_id: int | None,
+    leader_id: int | None,
+    work_site_city: str | None,
+    hierarchical_level: str | None,
+    contract_type: str | None,
+    collaborator_status: str | None,
+    linkage_type: str | None,
+):
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        cond = or_(Employee.name.ilike(term), Employee.identification_number.ilike(term))
+        q = q.where(cond)
+        count_q = count_q.where(cond)
+    if status and status.strip():
+        q = q.where(Employee.status == status.strip())
+        count_q = count_q.where(Employee.status == status.strip())
+    if area_id is not None:
+        q = q.where(Employee.area_id == area_id)
+        count_q = count_q.where(Employee.area_id == area_id)
+    if leader_id is not None:
+        q = q.where(Employee.leader_id == leader_id)
+        count_q = count_q.where(Employee.leader_id == leader_id)
+    if work_site_city and work_site_city.strip():
+        q = q.where(EmployeeLabor.work_site_city == work_site_city.strip())
+        count_q = count_q.where(EmployeeLabor.work_site_city == work_site_city.strip())
+    if hierarchical_level and hierarchical_level.strip():
+        q = q.where(EmployeeLabor.hierarchical_level == hierarchical_level.strip())
+        count_q = count_q.where(EmployeeLabor.hierarchical_level == hierarchical_level.strip())
+    if contract_type and contract_type.strip():
+        q = q.where(EmployeeLabor.contract_type == contract_type.strip())
+        count_q = count_q.where(EmployeeLabor.contract_type == contract_type.strip())
+    if collaborator_status and collaborator_status.strip():
+        q = q.where(EmployeeLabor.collaborator_status == collaborator_status.strip())
+        count_q = count_q.where(EmployeeLabor.collaborator_status == collaborator_status.strip())
+    if linkage_type and linkage_type.strip():
+        q = q.where(EmployeeLabor.linkage_type == linkage_type.strip())
+        count_q = count_q.where(EmployeeLabor.linkage_type == linkage_type.strip())
+    return q, count_q
+
+
 async def list_employees_for_actor(
     db: AsyncSession,
     actor: User,
@@ -85,35 +140,107 @@ async def list_employees_for_actor(
     leader_id: int | None = None,
     search: str | None = None,
     team_only: bool = False,
+    status: str | None = None,
+    work_site_city: str | None = None,
+    hierarchical_level: str | None = None,
+    contract_type: str | None = None,
+    collaborator_status: str | None = None,
+    linkage_type: str | None = None,
 ) -> tuple[list[Employee], int]:
-    q = select(Employee).options(
+    q = _employee_list_base().options(
         selectinload(Employee.area),
         selectinload(Employee.leader_user),
         selectinload(Employee.temporal_category),
     )
-    count_q = select(func.count()).select_from(Employee)
-
-    if search and search.strip():
-        term = f"%{search.strip()}%"
-        cond = or_(Employee.name.ilike(term), Employee.identification_number.ilike(term))
-        q = q.where(cond)
-        count_q = count_q.where(cond)
+    count_q = (
+        select(func.count(func.distinct(Employee.id)))
+        .select_from(Employee)
+        .outerjoin(EmployeeLabor, EmployeeLabor.employee_id == Employee.id)
+    )
 
     if _scoped_to_led_team(actor, team_only=team_only, leader_id=leader_id):
         q = q.where(Employee.leader_id == actor.id)
         count_q = count_q.where(Employee.leader_id == actor.id)
+        q, count_q = _apply_employee_list_filters(
+            q,
+            count_q,
+            search=search,
+            status=status,
+            area_id=None,
+            leader_id=None,
+            work_site_city=work_site_city,
+            hierarchical_level=hierarchical_level,
+            contract_type=contract_type,
+            collaborator_status=collaborator_status,
+            linkage_type=linkage_type,
+        )
     else:
-        if area_id is not None:
-            q = q.where(Employee.area_id == area_id)
-            count_q = count_q.where(Employee.area_id == area_id)
-        if leader_id is not None:
-            q = q.where(Employee.leader_id == leader_id)
-            count_q = count_q.where(Employee.leader_id == leader_id)
+        q, count_q = _apply_employee_list_filters(
+            q,
+            count_q,
+            search=search,
+            status=status,
+            area_id=area_id,
+            leader_id=leader_id,
+            work_site_city=work_site_city,
+            hierarchical_level=hierarchical_level,
+            contract_type=contract_type,
+            collaborator_status=collaborator_status,
+            linkage_type=linkage_type,
+        )
 
     total = (await db.execute(count_q)).scalar_one()
-    q = q.order_by(Employee.id).offset((page - 1) * page_size).limit(page_size)
+    q = q.distinct().order_by(Employee.id).offset((page - 1) * page_size).limit(page_size)
     rows = (await db.execute(q)).scalars().all()
     return list(rows), total
+
+
+async def get_employee_filter_options(
+    db: AsyncSession,
+    actor: User,
+) -> EmployeeFilterOptionsRead:
+    areas_r = await db.execute(
+        select(Area.id, Area.name).where(Area.status == EntityStatus.ACTIVE.value).order_by(Area.name)
+    )
+    areas = [{"id": row[0], "name": row[1]} for row in areas_r.all()]
+
+    leaders: list[dict[str, int | str]] = []
+    if not acts_as_team_leader(actor):
+        leaders_r = await db.execute(
+            select(User.id, User.name)
+            .join(Profile, User.profile_id == Profile.id)
+            .where(
+                User.status == EntityStatus.ACTIVE.value,
+                Profile.behavior_key == Role.LEADER.value,
+            )
+            .order_by(User.name)
+        )
+        leaders = [{"id": row[0], "name": row[1]} for row in leaders_r.all()]
+
+    def distinct_labor(col):
+        return select(col).where(col.isnot(None), col != "").distinct().order_by(col)
+
+    cities = [
+        r[0]
+        for r in (
+            await db.execute(distinct_labor(EmployeeLabor.work_site_city))
+        ).all()
+    ]
+    levels = [r[0] for r in (await db.execute(distinct_labor(EmployeeLabor.hierarchical_level))).all()]
+    contracts = [r[0] for r in (await db.execute(distinct_labor(EmployeeLabor.contract_type))).all()]
+    collab = [r[0] for r in (await db.execute(distinct_labor(EmployeeLabor.collaborator_status))).all()]
+    links = [r[0] for r in (await db.execute(distinct_labor(EmployeeLabor.linkage_type))).all()]
+
+    return EmployeeFilterOptionsRead(
+        areas=areas,
+        leaders=leaders,
+        work_site_cities=cities,
+        hierarchical_levels=levels,
+        contract_types=contracts,
+        collaborator_statuses=collab,
+        linkage_types=links,
+        document_kinds=[{"value": k, "label": v} for k, v in DOCUMENT_KIND_LABELS.items()],
+    )
 
 
 async def list_assignable_employees_for_actor(

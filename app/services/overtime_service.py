@@ -18,6 +18,7 @@ _OT_LOAD = (
     selectinload(OvertimeRequest.approver),
     selectinload(OvertimeRequest.history_entries).selectinload(OvertimeRequestHistory.user),
 )
+from app.core.overtime_time import calc_overtime_hours
 from app.schemas.overtime import OvertimeApproveReject, OvertimeRequestCreate, OvertimeRequestUpdate
 from app.services import notification_service as notif_svc
 from app.services.employee_service import (
@@ -29,14 +30,17 @@ from app.services.rbac_service import behavior_key
 
 
 def _snapshot(req: OvertimeRequest) -> str:
-    return json.dumps(
-        {
-            "employee_id": req.employee_id,
-            "date": str(req.date),
-            "hours": str(req.hours),
-            "status": req.status,
-        }
-    )
+    payload: dict[str, str | int] = {
+        "employee_id": req.employee_id,
+        "date": str(req.date),
+        "hours": str(req.hours),
+        "status": req.status,
+    }
+    if req.start_time is not None:
+        payload["start_time"] = req.start_time.strftime("%H:%M")
+    if req.end_time is not None:
+        payload["end_time"] = req.end_time.strftime("%H:%M")
+    return json.dumps(payload)
 
 
 async def _add_history(
@@ -130,7 +134,9 @@ async def list_requests(
     return list(rows), total
 
 
-async def create_request(db: AsyncSession, actor: User, data: OvertimeRequestCreate) -> OvertimeRequest:
+async def create_requests(
+    db: AsyncSession, actor: User, data: OvertimeRequestCreate
+) -> tuple[list[OvertimeRequest], Decimal, Decimal]:
     allowed_create = (
         Role.LEADER.value,
         Role.ADMIN.value,
@@ -147,40 +153,53 @@ async def create_request(db: AsyncSession, actor: User, data: OvertimeRequestCre
     if acts_as_team_leader(actor):
         ensure_employee_access(actor, emp)
 
-    req = OvertimeRequest(
-        employee_id=data.employee_id,
-        requested_by=actor.id,
-        date=data.date,
-        hours=data.hours,
-        justification=data.justification,
-        status=EntityStatus.PENDING.value,
-    )
-    db.add(req)
-    await db.flush()
-    await _add_history(
-        db,
-        req.id,
-        OvertimeHistoryAction.CREATED.value,
-        actor.id,
-        None,
-        _snapshot(req),
-    )
-    en = await db.execute(select(Employee.name).where(Employee.id == req.employee_id))
-    emp_name = en.scalar_one()
-    await notif_svc.notify_admins_new_pending_ot(
-        db,
-        request_id=req.id,
-        employee_name=emp_name,
-        request_date=str(req.date),
-        hours=str(req.hours),
-        exclude_user_id=actor.id
-        if behavior_key(actor) in (Role.ADMIN.value, Role.MANAGEMENT.value)
-        else None,
-    )
+    hours_per_day = calc_overtime_hours(data.start_time, data.end_time)
+    sorted_dates = sorted(data.dates)
+    created_ids: list[int] = []
+
+    for work_date in sorted_dates:
+        req = OvertimeRequest(
+            employee_id=data.employee_id,
+            requested_by=actor.id,
+            date=work_date,
+            hours=hours_per_day,
+            start_time=data.start_time,
+            end_time=data.end_time,
+            justification=data.justification,
+            status=EntityStatus.PENDING.value,
+        )
+        db.add(req)
+        await db.flush()
+        created_ids.append(req.id)
+        await _add_history(
+            db,
+            req.id,
+            OvertimeHistoryAction.CREATED.value,
+            actor.id,
+            None,
+            _snapshot(req),
+        )
+        en = await db.execute(select(Employee.name).where(Employee.id == req.employee_id))
+        emp_name = en.scalar_one()
+        await notif_svc.notify_admins_new_pending_ot(
+            db,
+            request_id=req.id,
+            employee_name=emp_name,
+            request_date=str(req.date),
+            hours=str(req.hours),
+            exclude_user_id=actor.id
+            if behavior_key(actor) in (Role.ADMIN.value, Role.MANAGEMENT.value)
+            else None,
+        )
+
     await db.commit()
-    await db.refresh(req)
-    r2 = await db.execute(select(OvertimeRequest).options(*_OT_LOAD).where(OvertimeRequest.id == req.id))
-    return r2.scalar_one()
+    total_hours = (hours_per_day * len(sorted_dates)).quantize(Decimal("0.01"))
+    r2 = await db.execute(
+        select(OvertimeRequest).options(*_OT_LOAD).where(OvertimeRequest.id.in_(created_ids))
+    )
+    items = list(r2.scalars().all())
+    items.sort(key=lambda x: (x.date, x.id))
+    return items, hours_per_day, total_hours
 
 
 async def update_request(
@@ -207,10 +226,15 @@ async def update_request(
 
     if data.date is not None:
         req.date = data.date
-    if data.hours is not None:
-        req.hours = data.hours
+    if data.start_time is not None:
+        req.start_time = data.start_time
+    if data.end_time is not None:
+        req.end_time = data.end_time
     if data.justification is not None:
         req.justification = data.justification
+
+    if req.start_time is not None and req.end_time is not None:
+        req.hours = calc_overtime_hours(req.start_time, req.end_time)
 
     await _add_history(
         db,

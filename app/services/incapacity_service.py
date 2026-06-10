@@ -182,6 +182,8 @@ async def list_notes(
     type_filter: str | None = None,
     search: str | None = None,
     leader_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> tuple[list[IncapacityNote], int]:
     q = select(IncapacityNote)
     count_q = select(func.count()).select_from(IncapacityNote)
@@ -214,6 +216,13 @@ async def list_notes(
     if type_filter:
         q = q.where(IncapacityNote.type == type_filter)
         count_q = count_q.where(IncapacityNote.type == type_filter)
+    if date_from is not None:
+        overlap_from = or_(IncapacityNote.end_date.is_(None), IncapacityNote.end_date >= date_from)
+        q = q.where(overlap_from)
+        count_q = count_q.where(overlap_from)
+    if date_to is not None:
+        q = q.where(IncapacityNote.start_date <= date_to)
+        count_q = count_q.where(IncapacityNote.start_date <= date_to)
 
     total = (await db.execute(count_q)).scalar_one()
     q = (
@@ -293,6 +302,9 @@ async def create_note(
         support=(data.support.strip() if data.support and data.support.strip() else None),
         start_date=data.start_date,
         end_date=data.end_date,
+        causation_year=data.causation_year,
+        causation_month=data.causation_month,
+        causation_half=data.causation_half,
         long_absence_document_kind=kind_val,
         long_absence_second_file_url=long_absence_second_file_url,
         long_absence_eps_transcribed_text=None,
@@ -339,6 +351,12 @@ async def update_note(
         note.start_date = data.start_date
     if data.end_date is not None:
         note.end_date = data.end_date
+    if "causation_year" in data.model_fields_set:
+        note.causation_year = data.causation_year
+    if "causation_month" in data.model_fields_set:
+        note.causation_month = data.causation_month
+    if "causation_half" in data.model_fields_set:
+        note.causation_half = data.causation_half
     if "temporal_category_id" in data.model_fields_set:
         if data.temporal_category_id is None:
             raise bad_request("La categoría temporal es obligatoria")

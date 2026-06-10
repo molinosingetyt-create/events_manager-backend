@@ -58,6 +58,9 @@ class IncapacityNoteCreate(BaseModel):
     support: Optional[str] = Field(default=None, max_length=65535)
     start_date: date
     end_date: Optional[date] = None
+    causation_year: int | None = Field(default=None, ge=2000, le=2100)
+    causation_month: int | None = Field(default=None, ge=1, le=12)
+    causation_half: int | None = Field(default=None, ge=1, le=2)
     status: EntityStatus = EntityStatus.ACTIVE
     long_absence_document_kind: LongAbsenceDocumentKind | None = None
     eps_transcribed_text: Optional[str] = Field(default=None, max_length=65535)  # ignorado; solo imagen EPS
@@ -72,6 +75,9 @@ class IncapacityNoteUpdate(BaseModel):
     support: Optional[str] = Field(default=None, max_length=65535)
     start_date: date | None = None
     end_date: Optional[date] = None
+    causation_year: int | None = Field(default=None, ge=2000, le=2100)
+    causation_month: int | None = Field(default=None, ge=1, le=12)
+    causation_half: int | None = Field(default=None, ge=1, le=2)
     status: EntityStatus | None = None
     long_absence_document_kind: LongAbsenceDocumentKind | None = None
 
@@ -93,6 +99,10 @@ class IncapacityNoteRead(BaseModel):
     support: Optional[str] = None
     start_date: date
     end_date: Optional[date]
+    causation_year: int | None = None
+    causation_month: int | None = None
+    causation_half: int | None = None
+    causation_quincena_label: str | None = None
     long_absence_document_kind: str | None = None
     file_url: Optional[str]
     long_absence_second_file_url: str | None = None
